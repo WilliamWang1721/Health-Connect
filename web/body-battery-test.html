@@ -1,0 +1,454 @@
+<!doctype html>
+<html lang="zh-Hans">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Body Battery 测试页（Reserve/Comfort/Fatigue v0）</title>
+    <style>
+      :root {
+        --bg: #0b1220;
+        --card: #111a2d;
+        --border: #243252;
+        --text: #e8eefc;
+        --muted: #9db0da;
+        --accent: #7aa2ff;
+        --danger: #ff6b6b;
+        --good: #3ddc97;
+        --mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New",
+          monospace;
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      body {
+        margin: 0;
+        font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, "Apple Color Emoji",
+          "Segoe UI Emoji";
+        background: radial-gradient(1200px 800px at 20% 0%, #17264d 0%, var(--bg) 55%);
+        color: var(--text);
+      }
+
+      header {
+        padding: 22px 18px 12px;
+        max-width: 1200px;
+        margin: 0 auto;
+      }
+
+      header h1 {
+        margin: 0 0 6px;
+        font-size: 20px;
+        font-weight: 700;
+        letter-spacing: 0.2px;
+      }
+
+      header p {
+        margin: 0;
+        color: var(--muted);
+        line-height: 1.5;
+        font-size: 13px;
+      }
+
+      .wrap {
+        max-width: 1200px;
+        margin: 0 auto;
+        padding: 12px 18px 32px;
+        display: grid;
+        grid-template-columns: 1fr;
+        gap: 14px;
+      }
+
+      @media (min-width: 960px) {
+        .wrap {
+          grid-template-columns: 420px 1fr;
+          align-items: start;
+        }
+      }
+
+      .card {
+        background: linear-gradient(180deg, rgba(255, 255, 255, 0.035), rgba(255, 255, 255, 0.015));
+        border: 1px solid var(--border);
+        border-radius: 14px;
+        padding: 14px;
+        box-shadow: 0 12px 30px rgba(0, 0, 0, 0.25);
+      }
+
+      .card h2 {
+        margin: 0 0 10px;
+        font-size: 14px;
+        color: #cfe0ff;
+      }
+
+      .row {
+        display: grid;
+        gap: 10px;
+      }
+
+      .row.two {
+        grid-template-columns: 1fr 1fr;
+      }
+
+      label {
+        display: grid;
+        gap: 6px;
+        font-size: 12px;
+        color: var(--muted);
+      }
+
+      input,
+      select,
+      textarea {
+        width: 100%;
+        border-radius: 10px;
+        border: 1px solid var(--border);
+        background: rgba(10, 16, 30, 0.65);
+        color: var(--text);
+        padding: 9px 10px;
+        font-size: 13px;
+        outline: none;
+      }
+
+      textarea {
+        min-height: 140px;
+        resize: vertical;
+        font-family: var(--mono);
+        line-height: 1.4;
+      }
+
+      input:focus,
+      select:focus,
+      textarea:focus {
+        border-color: rgba(122, 162, 255, 0.75);
+        box-shadow: 0 0 0 3px rgba(122, 162, 255, 0.15);
+      }
+
+      details {
+        border: 1px solid var(--border);
+        border-radius: 12px;
+        padding: 10px;
+        margin-top: 10px;
+        background: rgba(10, 16, 30, 0.35);
+      }
+
+      details summary {
+        cursor: pointer;
+        color: #cfe0ff;
+        font-size: 12px;
+      }
+
+      .actions {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+        margin-top: 12px;
+      }
+
+      button {
+        border: 1px solid var(--border);
+        background: rgba(122, 162, 255, 0.12);
+        color: var(--text);
+        border-radius: 10px;
+        padding: 9px 10px;
+        font-size: 13px;
+        cursor: pointer;
+      }
+
+      button.primary {
+        background: rgba(122, 162, 255, 0.22);
+        border-color: rgba(122, 162, 255, 0.55);
+      }
+
+      button.danger {
+        background: rgba(255, 107, 107, 0.14);
+        border-color: rgba(255, 107, 107, 0.55);
+      }
+
+      button:disabled {
+        opacity: 0.6;
+        cursor: not-allowed;
+      }
+
+      .tabs {
+        display: inline-flex;
+        gap: 6px;
+        margin-bottom: 10px;
+      }
+
+      .tab {
+        padding: 8px 10px;
+        font-size: 12px;
+      }
+
+      .tab.active {
+        border-color: rgba(122, 162, 255, 0.55);
+        background: rgba(122, 162, 255, 0.22);
+      }
+
+      table {
+        width: 100%;
+        border-collapse: collapse;
+      }
+
+      th,
+      td {
+        border-bottom: 1px solid rgba(36, 50, 82, 0.7);
+        padding: 8px 6px;
+        font-size: 12px;
+        color: var(--text);
+        text-align: left;
+        vertical-align: top;
+      }
+
+      th {
+        position: sticky;
+        top: 0;
+        background: rgba(10, 16, 30, 0.85);
+        color: #cfe0ff;
+        z-index: 1;
+      }
+
+      .scroll {
+        max-height: 360px;
+        overflow: auto;
+        border: 1px solid var(--border);
+        border-radius: 12px;
+      }
+
+      .pill {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        padding: 5px 8px;
+        border-radius: 999px;
+        border: 1px solid var(--border);
+        background: rgba(10, 16, 30, 0.55);
+        font-size: 12px;
+        color: var(--muted);
+      }
+
+      .pill strong {
+        color: var(--text);
+      }
+
+      #chart {
+        width: 100%;
+        height: 260px;
+        border: 1px solid var(--border);
+        border-radius: 12px;
+        background: rgba(10, 16, 30, 0.35);
+      }
+
+      .error {
+        color: var(--danger);
+        font-size: 12px;
+        margin-top: 8px;
+        white-space: pre-wrap;
+      }
+
+      .hint {
+        color: var(--muted);
+        font-size: 12px;
+      }
+    </style>
+  </head>
+  <body>
+    <header>
+      <h1>Body Battery 测试页（Reserve / Comfort / Fatigue v0）</h1>
+      <p>
+        这是一个离线沙盒：输入模拟数据（或粘贴 JSON），推算 Reserve(BB) 曲线、Comfort/Fatigue，以及 Charge/Drain/Confidence。输出仅为健康洞察演示，不是医疗诊断。
+      </p>
+    </header>
+
+    <div class="wrap">
+      <section class="card" id="left">
+        <h2>参数与基线</h2>
+        <div class="row two">
+          <label>Epoch（分钟）<input id="epochMinutes" type="number" min="1" step="1" value="5" /></label>
+          <label>初始 Reserve(BB)（0–100）<input id="initialBB" type="number" min="0" max="100" step="1" value="70" /></label>
+        </div>
+
+        <details open>
+          <summary>个人基线（可选，不填则从输入估计 + 默认值兜底）</summary>
+          <div class="row two" style="margin-top: 10px">
+            <label>RHR_base（bpm）<input id="rhrBpm" type="number" step="0.1" placeholder="例如 58" /></label>
+            <label>HRV_base（SDNN, ms）<input id="hrvSdnnMs" type="number" step="0.1" placeholder="例如 55" /></label>
+            <label>SpO₂_base（%）<input id="spo2Pct" type="number" step="0.1" placeholder="例如 97" /></label>
+            <label>RR_base（次/分）<input id="respRateBrpm" type="number" step="0.1" placeholder="例如 14" /></label>
+            <label>Temp_base（°C）<input id="wristTempC" type="number" step="0.01" placeholder="例如 36.5" /></label>
+            <label>FTP（W，可选）<input id="ftpW" type="number" step="1" placeholder="例如 220" /></label>
+            <label>HR_max（bpm，可选）<input id="hrMaxBpm" type="number" step="1" placeholder="例如 190" /></label>
+          </div>
+        </details>
+
+        <details>
+          <summary>高级参数（可选）</summary>
+          <div class="row two" style="margin-top: 10px">
+            <label>睡眠充电基准（BB/h）<input id="baseSleepChargePerHour" type="number" step="0.1" placeholder="默认 9" /></label>
+            <label>静息充电基准（BB/h）<input id="baseRestChargePerHour" type="number" step="0.1" placeholder="默认 2" /></label>
+            <label>冥想充电基准（BB/h）<input id="baseMindChargePerHour" type="number" step="0.1" placeholder="默认 4" /></label>
+            <label>训练最大放电（BB/h）<input id="loadDrainWorkoutMaxPerHour" type="number" step="0.1" placeholder="默认 35" /></label>
+            <label>日常最大放电（BB/h）<input id="loadDrainActiveMaxPerHour" type="number" step="0.1" placeholder="默认 18" /></label>
+          </div>
+          <div class="row two" style="margin-top: 10px">
+            <label>入睡窗口（min）<input id="tempOnsetWindowMinutes" type="number" step="1" placeholder="默认 60" /></label>
+            <label>入睡温升上限（°C）<input id="tempOnsetBeneficialMaxC" type="number" step="0.01" placeholder="默认 0.45" /></label>
+            <label>过热阈值（°C）<input id="tempOverheatStartC" type="number" step="0.01" placeholder="默认 0.35" /></label>
+            <label>发热样阈值（°C）<input id="tempFeverStartC" type="number" step="0.01" placeholder="默认 0.9" /></label>
+            <label>Temp 异常权重<input id="tempAnomWeight" type="number" step="0.05" placeholder="默认 0.9" /></label>
+            <label>Comfort 惩罚/Index<input id="comfortPenaltyPerIndex" type="number" step="1" placeholder="默认 12" /></label>
+            <label>Fatigue=100 的 Drain/h<input id="fatigueDrainPerHourFor100" type="number" step="1" placeholder="默认 40" /></label>
+          </div>
+          <div class="row two" style="margin-top: 10px">
+            <label>恢复窗口（min）<input id="postActivityRecoveryWindowMinutes" type="number" step="1" placeholder="默认 90" /></label>
+            <label>最大恢复时长（min）<input id="postActivityRecoveryMaxMinutes" type="number" step="1" placeholder="默认 45" /></label>
+            <label>CalmRec 最大充电（BB/h）<input id="postActivityRecoveryChargeMaxPerHour" type="number" step="0.1" placeholder="默认 4" /></label>
+            <label>Stress 抑制 power<input id="postActivityRecoveryStressSuppressionPower" type="number" step="1" placeholder="默认 2" /></label>
+            <label>Stress 抑制最小系数<input id="postActivityRecoveryStressSuppressionMinFactor" type="number" step="0.01" placeholder="默认 0.08" /></label>
+            <label>恢复期最大活动强度（0-1）<input id="postActivityRecoveryMaxMovementIntensity01" type="number" step="0.01" placeholder="默认 0.15" /></label>
+          </div>
+        </details>
+      </section>
+
+      <section class="card" id="right">
+        <h2>输入与输出</h2>
+
+        <div class="tabs">
+          <button class="tab active" data-tab="segments" id="tabBtnSegments">分段输入</button>
+          <button class="tab" data-tab="json" id="tabBtnJson">JSON 输入</button>
+          <button class="tab" data-tab="apple" id="tabBtnApple">Apple Health 导入</button>
+        </div>
+
+        <div id="tabSegments">
+          <div class="row two">
+            <label>开始时间（本地）<input id="startTime" type="datetime-local" /></label>
+            <label class="hint"
+              >建议：用“分段输入”快速构造睡眠/训练/日常段；不填视为现在。</label
+            >
+          </div>
+
+          <div class="actions">
+            <button id="addSegment">添加分段</button>
+            <button id="loadSample" class="primary">载入示例</button>
+            <button id="clearSegments" class="danger">清空</button>
+            <button id="runSegments" class="primary">计算 BB</button>
+          </div>
+
+          <div class="scroll" style="margin-top: 10px">
+            <table id="segmentsTable">
+              <thead>
+                <tr>
+                  <th style="min-width: 140px">类型</th>
+                  <th style="min-width: 80px">时长(min)</th>
+                  <th style="min-width: 70px">HR</th>
+                  <th style="min-width: 80px">HRV(ms)</th>
+                  <th style="min-width: 90px">步频(步/分)</th>
+                  <th style="min-width: 110px">能量(kcal/分)</th>
+                  <th style="min-width: 70px">功率(W)</th>
+                  <th style="min-width: 70px">SpO₂(%)</th>
+                  <th style="min-width: 70px">RR</th>
+                  <th style="min-width: 90px">腕温(°C)</th>
+                  <th style="min-width: 70px">操作</th>
+                </tr>
+              </thead>
+              <tbody></tbody>
+            </table>
+          </div>
+
+          <div class="error" id="segmentsError" hidden></div>
+        </div>
+
+        <div id="tabJson" hidden>
+          <p class="hint">
+            JSON 结构：<span style="font-family: var(--mono)">{"epochMinutes":5,"initialBB":70,"baselines":{...},"epochs":[...]}</span>
+          </p>
+          <textarea id="jsonInput" spellcheck="false"></textarea>
+          <div class="actions">
+            <button id="loadSampleJson">载入示例 JSON</button>
+            <button id="runJson" class="primary">计算 BB</button>
+          </div>
+          <div class="error" id="jsonError" hidden></div>
+        </div>
+
+        <div id="tabApple" hidden>
+          <p class="hint">
+            支持导入 Apple Health 导出的 <span style="font-family: var(--mono)">export.xml</span>。
+            如果你下载到的是 <span style="font-family: var(--mono)">.zip</span>，请先解压后选择其中的
+            <span style="font-family: var(--mono)">export.xml</span>。
+          </p>
+
+          <div class="row">
+            <label>选择文件（export.xml / export.zip）
+              <input id="appleHealthFile" type="file" accept=".xml,.zip,application/zip,text/xml,application/xml" />
+            </label>
+          </div>
+
+          <div class="row two" style="margin-top: 10px">
+            <label>开始时间（本地）<input id="appleStartTime" type="datetime-local" /></label>
+            <label>结束时间（本地）<input id="appleEndTime" type="datetime-local" /></label>
+          </div>
+
+          <div class="row two" style="margin-top: 10px">
+            <label style="display: flex; gap: 8px; align-items: center">
+              <input id="appleIncludeWorkouts" type="checkbox" checked />
+              <span>标记 Workout 区间</span>
+            </label>
+            <label style="display: flex; gap: 8px; align-items: center">
+              <input id="appleIncludeMindful" type="checkbox" checked />
+              <span>标记 Mindful Session</span>
+            </label>
+          </div>
+
+          <div class="actions">
+            <button id="appleSetRange24h">最近 24h</button>
+            <button id="appleSetRange7d">最近 7d</button>
+            <button id="appleImportToJson">导入到 JSON</button>
+            <button id="appleImportAndRun" class="primary">导入并计算 BB</button>
+          </div>
+
+          <div class="hint" id="appleStatus" style="margin-top: 8px"></div>
+          <div class="error" id="appleError" hidden></div>
+        </div>
+
+        <hr style="border: 0; border-top: 1px solid rgba(36, 50, 82, 0.8); margin: 14px 0" />
+
+        <div class="row">
+          <div id="summaryBar" style="display: flex; flex-wrap: wrap; gap: 8px"></div>
+          <canvas id="chart" width="980" height="260"></canvas>
+          <details>
+            <summary>结果表（前 250 行）</summary>
+            <div class="scroll" style="margin-top: 10px">
+              <table id="resultTable">
+                <thead>
+                  <tr>
+                    <th>#</th>
+                    <th>时间</th>
+                    <th>Context</th>
+                    <th>BB</th>
+                    <th>Comfort</th>
+                    <th>Fatigue</th>
+                    <th>TempΔ</th>
+                    <th>TempMode</th>
+                    <th>Δ</th>
+                    <th>Charge</th>
+                    <th>CalmRec</th>
+                    <th>Drain</th>
+                    <th>Conf</th>
+                  </tr>
+                </thead>
+                <tbody></tbody>
+              </table>
+            </div>
+          </details>
+          <details>
+            <summary>结果 JSON（可导出/复现）</summary>
+            <textarea id="jsonOutput" spellcheck="false" readonly></textarea>
+          </details>
+        </div>
+      </section>
+    </div>
+
+    <script src="../src/bodyBatteryModel.js" defer></script>
+    <script src="./app.js" defer></script>
+  </body>
+</html>
