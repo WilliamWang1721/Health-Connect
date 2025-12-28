@@ -71,6 +71,47 @@
     wrap.setAttribute("aria-valuenow", String(Math.round(p)));
   }
 
+  const UPGRADE_ID = "2025-12-28";
+  const UPGRADE_STORAGE_KEY = "bb_upgrade_seen";
+
+  function maybeShowUpgradeModal() {
+    const modal = $("upgradeModal");
+    const closeBtn = $("upgradeModalClose");
+    const backdrop = $("upgradeBackdrop");
+    const version = $("upgradeVersion");
+    if (!modal || !closeBtn) return;
+
+    const v = window.BodyBatteryModel && window.BodyBatteryModel.VERSION ? String(window.BodyBatteryModel.VERSION) : null;
+    if (version) version.textContent = v ? `版本 ${v} · ${UPGRADE_ID}` : `版本 - · ${UPGRADE_ID}`;
+
+    let seen = null;
+    try {
+      seen = window.localStorage ? window.localStorage.getItem(UPGRADE_STORAGE_KEY) : null;
+    } catch (err) {
+      seen = null;
+    }
+    if (seen === UPGRADE_ID) return;
+
+    const onKeyDown = (e) => {
+      if (e && e.key === "Escape") close();
+    };
+
+    const close = () => {
+      modal.hidden = true;
+      document.removeEventListener("keydown", onKeyDown);
+      try {
+        if (window.localStorage) window.localStorage.setItem(UPGRADE_STORAGE_KEY, UPGRADE_ID);
+      } catch (err) {
+        // ignore
+      }
+    };
+
+    modal.hidden = false;
+    closeBtn.addEventListener("click", close, { once: true });
+    if (backdrop) backdrop.addEventListener("click", close, { once: true });
+    document.addEventListener("keydown", onKeyDown);
+  }
+
   function setActiveTab(name) {
     $("tabBtnSegments").classList.toggle("active", name === "segments");
     $("tabBtnJson").classList.toggle("active", name === "json");
@@ -1138,6 +1179,7 @@
       return;
     }
     wire();
+    maybeShowUpgradeModal();
   }
 
   if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", bootstrap);
