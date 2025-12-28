@@ -96,6 +96,18 @@
         color: var(--muted);
       }
 
+      label.checkbox {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+      }
+
+      label.checkbox input[type="checkbox"] {
+        width: auto;
+        padding: 0;
+        margin: 0;
+      }
+
       input,
       select,
       textarea {
@@ -378,6 +390,17 @@
             <label>FTP（W，可选）<input id="ftpW" type="number" step="1" placeholder="例如 220" /></label>
             <label>HR_max（bpm，可选）<input id="hrMaxBpm" type="number" step="1" placeholder="例如 190" /></label>
           </div>
+        </details>
+
+        <details>
+          <summary>行为基线（10 天个体化，可选）</summary>
+          <div class="row two" style="margin-top: 10px">
+            <label class="checkbox"><input id="behaviorBaselineEnabled" type="checkbox" />启用行为基线</label>
+            <label>基线天数<input id="behaviorBaselineDays" type="number" min="1" step="1" value="10" /></label>
+          </div>
+          <p class="hint" style="margin-top: 8px">
+            模型会用前 N 天构建睡眠/训练的“个人行为基线”，并从第 N+1 天起对异常动作进行幅度缩放（例如：睡眠时长虽不在通用健康区间，但若在个人基线内，则恢复幅度不再被打折）。
+          </p>
         </details>
 
         <details>

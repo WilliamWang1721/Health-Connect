@@ -44,6 +44,7 @@ node server.js
 {
   "epochMinutes": 5,
   "initialBB": 70,
+  "behaviorBaseline": { "enabled": true, "days": 10 },
   "baselines": { "rhrBpm": 60, "hrvSdnnMs": 55, "spo2Pct": 97, "respRateBrpm": 14, "wristTempC": 36.55 },
   "epochs": [
     { "timestampMs": 1730000000000, "hrBpm": 58, "sleepStage": "core", "steps": 0, "activeEnergyKcal": 0 }
@@ -56,3 +57,4 @@ node server.js
 - `epochs` 的最小单位是 **epoch**（例如 5 分钟）；模型会按时间排序计算。
 - 缺失项可以省略或写 `null`；模型会通过质量分与门控降权。
 - `sleepStage` 建议使用：`deep` / `core` / `rem` / `inBed` / `awake`
+- `behaviorBaseline`（可选）：当 `enabled=true` 且数据覆盖至少 `days` 天时，模型会用前 `days` 天游程构建睡眠/训练等“个人行为基线”，并从第 `days+1` 天游程起动态调整动作对 BB 的影响幅度。

@@ -52,6 +52,52 @@
     return m;
   }
 
+  function quantile(values, q) {
+    const xs = values.filter((v) => Number.isFinite(v)).slice().sort((a, b) => a - b);
+    if (xs.length === 0) return null;
+    const qq = clamp(Number(q), 0, 1);
+    const pos = (xs.length - 1) * qq;
+    const base = Math.floor(pos);
+    const rest = pos - base;
+    const next = xs[base + 1];
+    if (!Number.isFinite(next)) return xs[base];
+    return xs[base] + rest * (next - xs[base]);
+  }
+
+  function robustStats(values, opts) {
+    const xs = values.filter((v) => Number.isFinite(v));
+    const n = xs.length;
+    if (n === 0) {
+      return { n: 0, median: null, mad: null, sigma: null, p10: null, p90: null, min: null, max: null };
+    }
+
+    const med = median(xs);
+    const m = mad(xs, med);
+    const p10 = quantile(xs, 0.1);
+    const p90 = quantile(xs, 0.9);
+
+    let sigma = m !== null ? m * 1.4826 : null;
+    if (!Number.isFinite(sigma) || sigma <= 1e-6) {
+      if (Number.isFinite(p10) && Number.isFinite(p90) && p90 > p10) sigma = (p90 - p10) / 2.563;
+      else sigma = 0;
+    }
+
+    const sigmaMin = Number.isFinite(opts?.sigmaMin) ? Number(opts.sigmaMin) : 0;
+    const sigmaMax = Number.isFinite(opts?.sigmaMax) ? Number(opts.sigmaMax) : Infinity;
+    sigma = clamp(sigma, sigmaMin, sigmaMax);
+
+    const minV = xs.reduce((a, b) => Math.min(a, b), xs[0]);
+    const maxV = xs.reduce((a, b) => Math.max(a, b), xs[0]);
+
+    return { n, median: med, mad: m, sigma, p10, p90, min: minV, max: maxV };
+  }
+
+  function lerp(a, b, t) {
+    if (!Number.isFinite(a) || !Number.isFinite(b)) return a;
+    const tt = clamp(Number(t), 0, 1);
+    return a + (b - a) * tt;
+  }
+
   function parseTimestampMs(epoch) {
     const direct =
       epoch.timestampMs ??
@@ -162,6 +208,18 @@
       minChargeScale: 0.25,
       minDrainScale: 0.25,
       confidenceFloor: 0.15,
+      // Missing-data handling: short-gap carry-forward imputation with decayed quality.
+      // Purpose: avoid treating "missing vitals" as "perfect recovery" (esp. during sleep).
+      imputeHrMaxGapMinutes: 15,
+      imputeHrvMaxGapMinutes: 60,
+      imputeSpo2MaxGapMinutes: 30,
+      imputeRrMaxGapMinutes: 30,
+      imputeTempMaxGapMinutes: 60,
+      imputeHrQualityAtFresh: 0.6,
+      imputeHrvQualityAtFresh: 0.35,
+      imputeSpo2QualityAtFresh: 0.4,
+      imputeRrQualityAtFresh: 0.4,
+      imputeTempQualityAtFresh: 0.4,
       baseSleepChargePerHour: 9,
       baseRestChargePerHour: 2,
       baseMindChargePerHour: 4,
@@ -211,6 +269,314 @@
     params.epochMinutes = epochMinutes;
     params.initialBB = toNumberOrNull(userConfig?.initialBB ?? params.initialBB) ?? p.initialBB;
     return { params };
+  }
+
+  function readBehaviorBaselineConfig(userConfig) {
+    const raw = userConfig?.behaviorBaseline;
+    if (!raw || typeof raw !== "object") return { enabled: false };
+
+    const enabled = Boolean(raw.enabled ?? raw.enable ?? raw.on);
+    const days = clamp(toNumberOrNull(raw.days ?? raw.windowDays) ?? 10, 1, 60);
+    const minSleepBoutMinutes = clamp(toNumberOrNull(raw.minSleepBoutMinutes) ?? 180, 60, 720);
+    const minWorkoutBoutMinutes = clamp(toNumberOrNull(raw.minWorkoutBoutMinutes) ?? 10, 5, 240);
+    const minSamplesSleep = clamp(toNumberOrNull(raw.minSleepSamples) ?? 5, 1, 30);
+    const minSamplesWorkout = clamp(toNumberOrNull(raw.minWorkoutSamples) ?? 4, 1, 30);
+
+    const sleepAbsMinHours0 = clamp(toNumberOrNull(raw.sleepAbsMinHours) ?? 3.5, 2.5, 6);
+    const sleepHealthyMinHours0 = clamp(toNumberOrNull(raw.sleepHealthyMinHours) ?? 7.5, 4, 9.5);
+    const sleepTargetHours0 = clamp(toNumberOrNull(raw.sleepTargetHours) ?? 8, 5.5, 10.5);
+
+    const sleepAbsMinHours = sleepAbsMinHours0;
+    const sleepHealthyMinHours = clamp(Math.max(sleepHealthyMinHours0, sleepAbsMinHours + 0.5), 4, 10);
+    const sleepTargetHours = clamp(Math.max(sleepTargetHours0, sleepHealthyMinHours + 0.25), 5.5, 12);
+
+    return {
+      enabled,
+      days,
+      minSleepBoutMinutes,
+      minWorkoutBoutMinutes,
+      minSamplesSleep,
+      minSamplesWorkout,
+      sleepAbsMinHours,
+      sleepHealthyMinHours,
+      sleepTargetHours,
+    };
+  }
+
+  function robustZ(value, stats) {
+    if (!Number.isFinite(value)) return null;
+    const medianV = Number(stats?.median);
+    const sigma = Number(stats?.sigma);
+    if (!Number.isFinite(medianV) || !Number.isFinite(sigma) || sigma <= 0) return null;
+    return (value - medianV) / sigma;
+  }
+
+  function movementIntensity01FromEpoch(epoch, dtMinutes, baselines) {
+    const dtMin = Number.isFinite(dtMinutes) && dtMinutes > 0 ? dtMinutes : 5;
+    const steps = toNumberOrNull(epoch.steps) ?? 0;
+    const activeEnergy = toNumberOrNull(epoch.activeEnergyKcal ?? epoch.activeEnergy ?? epoch.energyKcal);
+    const power = toNumberOrNull(epoch.powerW ?? epoch.power);
+    const ftp = Number(baselines?.ftpW ?? 220);
+
+    const stepsPerMin = steps / dtMin;
+    const energyPerMin = activeEnergy === null ? 0 : activeEnergy / dtMin;
+
+    const stepsIdx = clamp(stepsPerMin / 150, 0, 1);
+    const energyIdx = clamp(energyPerMin / 20, 0, 1);
+    const powerIdx =
+      power === null || !Number.isFinite(ftp) || ftp <= 0 ? 0 : clamp(power / ftp, 0, 1.6) / 1.6;
+    return clamp(Math.max(stepsIdx, energyIdx, powerIdx), 0, 1);
+  }
+
+  function buildContextTimeline(epochs, params, baselines) {
+    const epochMinutes = Number.isFinite(Number(params?.epochMinutes)) ? Number(params.epochMinutes) : 5;
+    const dtHoursDefault = epochMinutes / 60;
+
+    let prevTs = null;
+    const timeline = [];
+    for (let i = 0; i < (epochs || []).length; i++) {
+      const e = epochs[i];
+      const ts = parseTimestampMs(e);
+
+      let dtHours = dtHoursDefault;
+      if (prevTs !== null && ts !== null) {
+        const diffH = (ts - prevTs) / 3600000;
+        if (Number.isFinite(diffH) && diffH > 0.1 / 60 && diffH < 6) dtHours = diffH;
+      }
+      prevTs = ts ?? prevTs;
+
+      const dtMinutes = dtHours * 60;
+      const context0 = e.context ? { ...(e.context || {}) } : classifyContext(e, baselines, epochMinutes);
+      timeline.push({ tsMs: ts, dtMinutes, dtHours, context0 });
+    }
+    return timeline;
+  }
+
+  function buildContextSegments(epochs, timeline, baselines) {
+    const segmentOf = new Array((epochs || []).length);
+    const segments = [];
+    let current = null;
+
+    for (let i = 0; i < (epochs || []).length; i++) {
+      const kind = timeline[i]?.context0?.kind ?? "AWAKE";
+      if (!current || current.kind !== kind) {
+        current = {
+          id: segments.length,
+          kind,
+          startIdx: i,
+          endIdx: i,
+          startTsMs: timeline[i]?.tsMs ?? null,
+          endTsMs: timeline[i]?.tsMs ?? null,
+          durationMinutes: 0,
+          intensity01Sum: 0,
+          intensityMinutes: 0,
+          meanMovementIntensity01: 0,
+          scales: null,
+        };
+        segments.push(current);
+      }
+
+      current.endIdx = i;
+      current.durationMinutes += Number(timeline[i]?.dtMinutes ?? 0) || 0;
+      const ts = timeline[i]?.tsMs ?? null;
+      if (ts !== null && ts !== undefined && Number.isFinite(ts)) current.endTsMs = ts;
+
+      if (kind === "WORKOUT" || kind === "ACTIVE" || kind === "LIGHT_ACTIVITY") {
+        const dtMinutes = Number(timeline[i]?.dtMinutes ?? 0) || 0;
+        const intensity = movementIntensity01FromEpoch(epochs[i], dtMinutes, baselines);
+        current.intensity01Sum += intensity * dtMinutes;
+        current.intensityMinutes += dtMinutes;
+      }
+
+      segmentOf[i] = current.id;
+    }
+
+    for (const seg of segments) {
+      seg.meanMovementIntensity01 =
+        seg.intensityMinutes > 0 ? clamp(seg.intensity01Sum / seg.intensityMinutes, 0, 1) : 0;
+      delete seg.intensity01Sum;
+      delete seg.intensityMinutes;
+    }
+
+    return { segments, segmentOf };
+  }
+
+  function sleepDurationHealthScale(durationHours, cfg) {
+    const d = Number(durationHours);
+    if (!Number.isFinite(d) || d <= 0) return 1;
+
+    const absMinH = Number(cfg?.sleepAbsMinHours ?? 3.5);
+    const healthyMinH = Number(cfg?.sleepHealthyMinHours ?? 7.5);
+    const targetH = Number(cfg?.sleepTargetHours ?? 8);
+
+    const absMinFactor = 0.3;
+    const belowHealthyMinFactor = 0.9;
+
+    if (d <= absMinH) return absMinFactor;
+    if (d < healthyMinH) {
+      const t = (d - absMinH) / Math.max(1e-6, healthyMinH - absMinH);
+      return lerp(absMinFactor, belowHealthyMinFactor, t);
+    }
+    if (d < targetH) {
+      const t = (d - healthyMinH) / Math.max(1e-6, targetH - healthyMinH);
+      return lerp(belowHealthyMinFactor, 1, t);
+    }
+    return 1;
+  }
+
+  function computeSleepChargeScale(durationHours, baselineStats, cfg) {
+    const healthScale = sleepDurationHealthScale(durationHours, cfg);
+    const out = {
+      durationHours: Number.isFinite(durationHours) ? Number(durationHours) : null,
+      healthScale,
+      baselineZ: null,
+      typicality01: null,
+      baselinePenalty: 1,
+      scale: healthScale,
+    };
+
+    if (!baselineStats || Number(baselineStats.n) < Number(cfg?.minSamplesSleep ?? 5)) return out;
+
+    const z = robustZ(Number(durationHours), baselineStats);
+    if (z === null) return out;
+
+    const zMax = 3;
+    const typicality01 = clamp(1 - Math.abs(z) / zMax, 0, 1);
+
+    let scale = lerp(healthScale, 1, typicality01);
+
+    const shortPenaltyStrength = 0.35;
+    const longPenaltyStrength = 0.12;
+    let baselinePenalty = 1;
+    if (z < -1) {
+      const anomaly01 = clamp((-z - 1) / (zMax - 1), 0, 1);
+      baselinePenalty = clamp(1 - shortPenaltyStrength * anomaly01, 0.2, 1);
+    } else if (z > 1) {
+      const anomaly01 = clamp((z - 1) / (zMax - 1), 0, 1);
+      baselinePenalty = clamp(1 - longPenaltyStrength * anomaly01, 0.2, 1);
+    }
+    scale = clamp(scale * baselinePenalty, 0.2, 1.2);
+
+    out.baselineZ = z;
+    out.typicality01 = typicality01;
+    out.baselinePenalty = baselinePenalty;
+    out.scale = scale;
+    return out;
+  }
+
+  function computeWorkoutLoadDrainScale(meanIntensity01, baselineStats, cfg) {
+    const intensity = clamp(Number(meanIntensity01 ?? 0), 0, 1);
+    const out = { meanIntensity01: intensity, baselineZ: null, anomaly01: null, scale: 1 };
+    if (!baselineStats || Number(baselineStats.n) < Number(cfg?.minSamplesWorkout ?? 4)) return out;
+
+    const z = robustZ(intensity, baselineStats);
+    if (z === null) return out;
+    out.baselineZ = z;
+
+    const z0 = 1;
+    const zMax = 3;
+    const absZ = Math.abs(z);
+    if (absZ <= z0) return out;
+
+    const anomaly01 = clamp((absZ - z0) / (zMax - z0), 0, 1);
+    const dir = clamp(z / zMax, -1, 1);
+    const strength = 0.35;
+    const scale = clamp(1 + strength * dir * anomaly01, 0.7, 1.4);
+
+    out.anomaly01 = anomaly01;
+    out.scale = scale;
+    return out;
+  }
+
+  function buildBehaviorBaselineFromSegments(segments, timeline, cfg) {
+    let firstTsMs = null;
+    let lastTsMs = null;
+    for (const r of timeline || []) {
+      const t = r?.tsMs ?? null;
+      if (t === null || t === undefined || !Number.isFinite(t)) continue;
+      if (firstTsMs === null || t < firstTsMs) firstTsMs = t;
+      if (lastTsMs === null || t > lastTsMs) lastTsMs = t;
+    }
+    const windowDays = clamp(Number(cfg?.days ?? 10), 1, 60);
+    const windowStartTsMs = firstTsMs;
+    const windowEndTsMs = firstTsMs === null ? null : firstTsMs + windowDays * 24 * 60 * 60000;
+
+    const hasFullWindow =
+      windowStartTsMs !== null &&
+      windowEndTsMs !== null &&
+      lastTsMs !== null &&
+      Number.isFinite(windowEndTsMs) &&
+      Number.isFinite(lastTsMs) &&
+      lastTsMs >= windowEndTsMs;
+
+    const baselineSegments =
+      windowEndTsMs === null
+        ? []
+        : (segments || []).filter((s) => Number.isFinite(Number(s?.startTsMs)) && Number(s.startTsMs) < windowEndTsMs);
+
+    const sleepDurHours = [];
+    const workoutIntensity01 = [];
+    const workoutDurMinutes = [];
+    const minSleepMinutes = Number(cfg?.minSleepBoutMinutes ?? 180);
+    const minWorkoutMinutes = Number(cfg?.minWorkoutBoutMinutes ?? 10);
+
+    for (const seg of baselineSegments) {
+      const durMin = Number(seg?.durationMinutes ?? 0);
+      if (!Number.isFinite(durMin) || durMin <= 0) continue;
+
+      if (seg.kind === "SLEEP" && durMin >= minSleepMinutes) sleepDurHours.push(durMin / 60);
+      if (seg.kind === "WORKOUT" && durMin >= minWorkoutMinutes) {
+        workoutIntensity01.push(clamp(Number(seg?.meanMovementIntensity01 ?? 0), 0, 1));
+        workoutDurMinutes.push(durMin);
+      }
+    }
+
+    const sleepStats = robustStats(sleepDurHours, { sigmaMin: 0.25, sigmaMax: 4 });
+    const workoutIntensityStats = robustStats(workoutIntensity01, { sigmaMin: 0.05, sigmaMax: 1 });
+    const workoutDurationStats = robustStats(workoutDurMinutes, { sigmaMin: 5, sigmaMax: 360 });
+
+    const ready =
+      Boolean(cfg?.enabled) &&
+      hasFullWindow &&
+      sleepStats.n >= Number(cfg?.minSamplesSleep ?? 5) &&
+      Number.isFinite(sleepStats.median);
+
+    return {
+      enabled: Boolean(cfg?.enabled),
+      ready,
+      windowDays,
+      windowStartTsMs,
+      windowEndTsMs,
+      firstTsMs,
+      lastTsMs,
+      sleep: { durationHours: sleepStats },
+      workout: { intensity01: workoutIntensityStats, durationMinutes: workoutDurationStats },
+    };
+  }
+
+  function attachBehaviorScalesToSegments(segments, behaviorBaseline, cfg) {
+    if (!behaviorBaseline?.enabled) return;
+    const sleepStats = behaviorBaseline?.sleep?.durationHours ?? null;
+    const workoutIntensityStats = behaviorBaseline?.workout?.intensity01 ?? null;
+
+    for (const seg of segments || []) {
+      if (!seg || typeof seg !== "object") continue;
+      const durationHours = Number(seg.durationMinutes) / 60;
+
+      if (seg.kind === "SLEEP") {
+        seg.scales = {
+          ...(seg.scales || {}),
+          sleep: computeSleepChargeScale(durationHours, sleepStats, cfg),
+        };
+      }
+
+      if (seg.kind === "WORKOUT") {
+        seg.scales = {
+          ...(seg.scales || {}),
+          workout: computeWorkoutLoadDrainScale(seg.meanMovementIntensity01, workoutIntensityStats, cfg),
+        };
+      }
+    }
   }
 
   function saturationFactor(bb, exponent) {
@@ -592,7 +958,7 @@
     const qLoad = clamp(Math.max(q.steps ?? 0, q.energy ?? 0, q.power ?? 0, q.hr ?? 0), 0, 1);
     const qStress = clamp(Math.max(q.hrv ?? 0, q.hr ?? 0), 0, 1);
     const qAnom = clamp(Math.max(q.spo2 ?? 0, q.rr ?? 0, q.temp ?? 0), 0, 1);
-    const qSleep = clamp(0.4 + 0.3 * (q.hrv ?? 0) + 0.2 * (q.hr ?? 0) + 0.1 * qAnom, 0, 1);
+    const qSleep = clamp(0.55 * (q.hrv ?? 0) + 0.35 * (q.hr ?? 0) + 0.1 * qAnom, 0, 1);
     const qRest = clamp(0.35 + 0.45 * (q.hr ?? 0) + 0.2 * (q.steps ?? 0), 0, 1);
     const qMind = clamp(0.35 + 0.4 * (q.hr ?? 0) + 0.25 * (q.hrv ?? 0), 0, 1);
 
@@ -859,8 +1225,16 @@
 
     epochs.sort((a, b) => (parseTimestampMs(a) ?? 0) - (parseTimestampMs(b) ?? 0));
 
+    const behaviorBaselineCfg = readBehaviorBaselineConfig(userConfig);
+    const timeline = buildContextTimeline(epochs, params, baselines);
+    const { segments: contextSegments, segmentOf: segmentOfEpoch } = buildContextSegments(epochs, timeline, baselines);
+    const behaviorBaseline = behaviorBaselineCfg.enabled
+      ? buildBehaviorBaselineFromSegments(contextSegments, timeline, behaviorBaselineCfg)
+      : null;
+    if (behaviorBaselineCfg.enabled) attachBehaviorScalesToSegments(contextSegments, behaviorBaseline, behaviorBaselineCfg);
+    const behaviorApplyFromTsMs = behaviorBaseline?.ready ? behaviorBaseline.windowEndTsMs : null;
+
     let bb = clamp(params.initialBB, 0, 100);
-    let prevTs = null;
     let prevContextKind = null;
     let sleepMinutesFromStart = null;
     let sleepHeatStreakMinutes = 0;
@@ -870,21 +1244,133 @@
     let lastActiveIntensity01 = 0;
     let prevSignals = null;
 
+    const carry = {
+      hr: { value: null, ageMin: null, lastKind: null },
+      hrv: { value: null, ageMin: null, lastKind: null },
+      spo2: { value: null, ageMin: null, lastKind: null },
+      rr: { value: null, ageMin: null, lastKind: null },
+      temp: { value: null, ageMin: null, lastKind: null },
+    };
+
+    function tickCarry(slot, rawValue, dtMinutes, contextKind) {
+      if (rawValue === null || rawValue === undefined) {
+        if (slot.value === null || slot.value === undefined) return;
+        const age = Number.isFinite(slot.ageMin) ? Number(slot.ageMin) : 0;
+        slot.ageMin = age + Math.max(0, Number(dtMinutes) || 0);
+        return;
+      }
+      slot.value = rawValue;
+      slot.ageMin = 0;
+      slot.lastKind = contextKind ?? null;
+    }
+
+    function maybeImpute(rawValue, slot, options) {
+      if (rawValue !== null && rawValue !== undefined) return { value: rawValue, q: null, imputed: false };
+      const allow = Boolean(options?.allow ?? true);
+      if (!allow) return { value: null, q: 0, imputed: false };
+
+      const maxGapMin = Number(options?.maxGapMin ?? 0);
+      const qFresh = clamp(Number(options?.qFresh ?? 0), 0, 1);
+      const requireLastKind = options?.requireLastKind ?? null;
+      if (!Number.isFinite(maxGapMin) || maxGapMin <= 0) return { value: null, q: 0, imputed: false };
+      if (qFresh <= 0) return { value: null, q: 0, imputed: false };
+      if (slot?.value === null || slot?.value === undefined) return { value: null, q: 0, imputed: false };
+      if (requireLastKind && slot?.lastKind !== requireLastKind) return { value: null, q: 0, imputed: false };
+
+      const ageMin = Number(slot?.ageMin ?? 0);
+      if (!Number.isFinite(ageMin) || ageMin < 0 || ageMin > maxGapMin) return { value: null, q: 0, imputed: false };
+
+      const freshness = clamp(1 - ageMin / maxGapMin, 0, 1);
+      return { value: slot.value, q: clamp(qFresh * freshness, 0, 1), imputed: true };
+    }
+
     const out = [];
     for (let i = 0; i < epochs.length; i++) {
       const e = epochs[i];
-      const ts = parseTimestampMs(e);
-      const dtHoursDefault = params.epochMinutes / 60;
-      let dtHours = dtHoursDefault;
-      if (prevTs !== null && ts !== null) {
-        const diffH = (ts - prevTs) / 3600000;
-        if (Number.isFinite(diffH) && diffH > 0.1 / 60 && diffH < 6) dtHours = diffH;
-      }
-      prevTs = ts ?? prevTs;
-      const dtMinutes = dtHours * 60;
+      const t = timeline[i] || {};
+      const ts = t.tsMs ?? null;
+      const dtHours = Number.isFinite(Number(t.dtHours)) ? Number(t.dtHours) : params.epochMinutes / 60;
+      const dtMinutes = Number.isFinite(Number(t.dtMinutes)) ? Number(t.dtMinutes) : dtHours * 60;
 
-      const q = computeQuality(e, baselines);
-      const context0 = e.context ? { ...(e.context || {}) } : classifyContext(e, baselines, params.epochMinutes);
+      const context0 =
+        t.context0 && typeof t.context0 === "object" ? t.context0 : classifyContext(e, baselines, params.epochMinutes);
+
+      const qRaw = computeQuality(e, baselines);
+
+      const rawHr = toNumberOrNull(e.hrBpm ?? e.hr);
+      const rawHrv = toNumberOrNull(e.hrvSdnnMs ?? e.hrvMs ?? e.hrv);
+      const rawSpo2 = asPercentMaybe(e.spo2Pct ?? e.spo2);
+      const rawRr = toNumberOrNull(e.respRateBrpm ?? e.respiratoryRate ?? e.rr);
+      const rawTemp = toNumberOrNull(e.wristTempC ?? e.tempC ?? e.temp);
+
+      tickCarry(carry.hr, rawHr, dtMinutes, context0.kind);
+      tickCarry(carry.hrv, rawHrv, dtMinutes, context0.kind);
+      tickCarry(carry.spo2, rawSpo2, dtMinutes, context0.kind);
+      tickCarry(carry.rr, rawRr, dtMinutes, context0.kind);
+      tickCarry(carry.temp, rawTemp, dtMinutes, context0.kind);
+
+      const allowSleepVitals = context0.kind === "SLEEP";
+      const hrImp = maybeImpute(rawHr, carry.hr, {
+        allow: true,
+        maxGapMin: params.imputeHrMaxGapMinutes,
+        qFresh: params.imputeHrQualityAtFresh,
+      });
+      const hrvImp = maybeImpute(rawHrv, carry.hrv, {
+        allow: true,
+        maxGapMin: params.imputeHrvMaxGapMinutes,
+        qFresh: params.imputeHrvQualityAtFresh,
+      });
+      const spo2Imp = maybeImpute(rawSpo2, carry.spo2, {
+        allow: allowSleepVitals,
+        requireLastKind: "SLEEP",
+        maxGapMin: params.imputeSpo2MaxGapMinutes,
+        qFresh: params.imputeSpo2QualityAtFresh,
+      });
+      const rrImp = maybeImpute(rawRr, carry.rr, {
+        allow: allowSleepVitals,
+        requireLastKind: "SLEEP",
+        maxGapMin: params.imputeRrMaxGapMinutes,
+        qFresh: params.imputeRrQualityAtFresh,
+      });
+      const tempImp = maybeImpute(rawTemp, carry.temp, {
+        allow: allowSleepVitals,
+        requireLastKind: "SLEEP",
+        maxGapMin: params.imputeTempMaxGapMinutes,
+        qFresh: params.imputeTempQualityAtFresh,
+      });
+
+      let eEff = e;
+      let q = qRaw;
+      const setEpoch = (k, v) => {
+        if (eEff === e) eEff = { ...e };
+        eEff[k] = v;
+      };
+      const setQ = (k, v) => {
+        if (q === qRaw) q = { ...qRaw };
+        q[k] = v;
+      };
+
+      if (hrImp.imputed) {
+        setEpoch("hrBpm", hrImp.value);
+        setQ("hr", hrImp.q);
+      }
+      if (hrvImp.imputed) {
+        setEpoch("hrvSdnnMs", hrvImp.value);
+        setQ("hrv", hrvImp.q);
+      }
+      if (spo2Imp.imputed) {
+        setEpoch("spo2Pct", spo2Imp.value);
+        setQ("spo2", spo2Imp.q);
+      }
+      if (rrImp.imputed) {
+        setEpoch("respRateBrpm", rrImp.value);
+        setQ("rr", rrImp.q);
+      }
+      if (tempImp.imputed) {
+        setEpoch("wristTempC", tempImp.value);
+        setQ("temp", tempImp.q);
+      }
+
       if (context0.kind === "SLEEP") {
         if (prevContextKind !== "SLEEP") {
           sleepMinutesFromStart = 0;
@@ -897,7 +1383,7 @@
         sleepHeatStreakMinutes = 0;
       }
 
-      const indices = computeIndices(e, context0, baselines, params, q, dtMinutes, {
+      const indices = computeIndices(eEff, context0, baselines, params, q, dtMinutes, {
         sleepMinutesFromStart,
         sleepHeatStreakMinutes,
       });
@@ -971,7 +1457,67 @@
       }
       const weights = ruleWeights(context);
 
-      const step = computeEpoch(dtHours, bb, context, indicesForStep, params, weights, calm.chargePerHour);
+      let indicesApplied = indicesForStep;
+      let behavior = null;
+      const segId = segmentOfEpoch[i];
+      const seg = segId !== null && segId !== undefined ? contextSegments[segId] : null;
+      const behaviorActive =
+        behaviorApplyFromTsMs !== null &&
+        behaviorApplyFromTsMs !== undefined &&
+        ts !== null &&
+        ts !== undefined &&
+        Number.isFinite(ts) &&
+        Number.isFinite(Number(behaviorApplyFromTsMs)) &&
+        ts >= Number(behaviorApplyFromTsMs) &&
+        Boolean(behaviorBaseline?.ready);
+
+      if (behaviorActive && seg && seg.scales) {
+        if (context.kind === "SLEEP") {
+          const scale = Number(seg.scales?.sleep?.scale ?? 1);
+          if (Number.isFinite(scale) && scale !== 1) {
+            indicesApplied = {
+              ...indicesApplied,
+              recovery: {
+                ...indicesApplied.recovery,
+                sleepRecovery: indicesApplied.recovery.sleepRecovery * scale,
+              },
+            };
+          }
+        }
+
+        if (context.kind === "WORKOUT") {
+          const scale = Number(seg.scales?.workout?.scale ?? 1);
+          if (Number.isFinite(scale) && scale !== 1) {
+            indicesApplied = {
+              ...indicesApplied,
+              drainRates: {
+                ...indicesApplied.drainRates,
+                loadRate: indicesApplied.drainRates.loadRate * scale,
+              },
+            };
+          }
+        }
+
+        behavior = {
+          applied: true,
+          applyFromTsMs: behaviorApplyFromTsMs,
+          segmentId: seg.id,
+          segmentKind: seg.kind,
+          segmentDurationMinutes: seg.durationMinutes,
+          scales: seg.scales,
+        };
+      } else if (behaviorBaselineCfg.enabled) {
+        behavior = {
+          applied: false,
+          applyFromTsMs: behaviorApplyFromTsMs,
+          segmentId: seg?.id ?? null,
+          segmentKind: seg?.kind ?? null,
+          segmentDurationMinutes: seg?.durationMinutes ?? null,
+          scales: seg?.scales ?? null,
+        };
+      }
+
+      const step = computeEpoch(dtHours, bb, context, indicesApplied, params, weights, calm.chargePerHour);
       const fatigueScale = Math.max(1e-6, Number(params.fatigueDrainPerHourFor100 ?? 40));
       const fatigueScore = clamp(100 * (step.drainPerHour / fatigueScale), 0, 100);
       if (context.kind === "SLEEP") {
@@ -1008,17 +1554,17 @@
         chargePerHour: step.chargePerHour,
         drainPerHour: step.drainPerHour,
         chargeComponents: {
-          sleep: indices.recovery.sleepRecovery,
-          rest: indices.recovery.restRecovery,
-          mind: indices.recovery.mindRecovery,
+          sleep: indicesApplied.recovery.sleepRecovery,
+          rest: indicesApplied.recovery.restRecovery,
+          mind: indicesApplied.recovery.mindRecovery,
           calmRecoveryIndex: calm.index,
           calmRecoveryChargePerHour: calm.chargePerHour,
           calmRecoveryPoints: step.chargePointsExtra,
         },
         drainComponents: {
-          loadPerHour: indices.drainRates.loadRate,
-          stressPerHour: indicesForStep.drainRates.stressRate,
-          anomPerHour: indices.drainRates.anomRate,
+          loadPerHour: indicesApplied.drainRates.loadRate,
+          stressPerHour: indicesApplied.drainRates.stressRate,
+          anomPerHour: indicesApplied.drainRates.anomRate,
           anomIndex: indices.recovery.anomIndex,
           anomBreakdown: indices.recovery.anomBreakdown,
         },
@@ -1031,6 +1577,7 @@
         quality: q,
         confidence: step.confidence,
         context,
+        behavior,
         input: indices.values,
       };
       out.push(row);
@@ -1039,7 +1586,14 @@
 
     const summary = summarize(out);
 
-    return { version: VERSION, params, baselines, series: out, summary };
+    return {
+      version: VERSION,
+      params,
+      baselines,
+      behaviorBaseline: behaviorBaselineCfg.enabled ? behaviorBaseline : null,
+      series: out,
+      summary,
+    };
   }
 
   function summarize(series) {
@@ -1094,19 +1648,59 @@
     const avgComfort = comfortCount > 0 ? comfortSum / comfortCount : null;
     const avgFatigue = fatigueCount > 0 ? fatigueSum / fatigueCount : null;
 
-    // 主睡眠段：取第一段连续 SLEEP
-    let sleepStartIdx = null;
-    let sleepEndIdx = null;
+    // 主睡眠段：允许夜里短暂清醒（awake gap），合并多段 SLEEP；再取总睡眠时长最长的一段
+    const MAX_WAKE_GAP_MIN = 90;
+
+    const sleepSegments = [];
     for (let i = 0; i < series.length; i++) {
-      if (series[i].context?.kind === "SLEEP") {
-        sleepStartIdx = i;
-        break;
-      }
+      if (series[i].context?.kind !== "SLEEP") continue;
+      const startIdx = i;
+      let endIdx = i;
+      while (endIdx + 1 < series.length && series[endIdx + 1].context?.kind === "SLEEP") endIdx++;
+      sleepSegments.push({ startIdx, endIdx });
+      i = endIdx;
     }
-    if (sleepStartIdx !== null) {
-      sleepEndIdx = sleepStartIdx;
-      while (sleepEndIdx + 1 < series.length && series[sleepEndIdx + 1].context?.kind === "SLEEP") {
-        sleepEndIdx++;
+
+    const sleepSessions = [];
+    if (sleepSegments.length > 0) {
+      let curr = null;
+      for (const seg of sleepSegments) {
+        const segSleepEpochs = seg.endIdx - seg.startIdx + 1;
+        if (!curr) {
+          curr = { startIdx: seg.startIdx, endIdx: seg.endIdx, sleepEpochs: segSleepEpochs };
+          continue;
+        }
+
+        let gapMin = 0;
+        if (curr.endIdx + 1 < seg.startIdx) {
+          const gapStartMs = series[curr.endIdx + 1]?.tsMs ?? null;
+          const gapEndMs = series[seg.startIdx]?.tsMs ?? null;
+          if (Number.isFinite(gapStartMs) && Number.isFinite(gapEndMs) && gapEndMs >= gapStartMs) {
+            gapMin = (gapEndMs - gapStartMs) / 60000;
+          } else {
+            for (let i = curr.endIdx + 1; i < seg.startIdx; i++) gapMin += Number(series[i]?.dtMinutes ?? 0);
+          }
+        }
+
+        if (gapMin <= MAX_WAKE_GAP_MIN) {
+          curr.endIdx = seg.endIdx;
+          curr.sleepEpochs += segSleepEpochs;
+        } else {
+          sleepSessions.push(curr);
+          curr = { startIdx: seg.startIdx, endIdx: seg.endIdx, sleepEpochs: segSleepEpochs };
+        }
+      }
+      if (curr) sleepSessions.push(curr);
+    }
+
+    let mainSleep = null;
+    for (const s of sleepSessions) {
+      if (!mainSleep) {
+        mainSleep = s;
+        continue;
+      }
+      if (s.sleepEpochs > mainSleep.sleepEpochs || (s.sleepEpochs === mainSleep.sleepEpochs && s.endIdx > mainSleep.endIdx)) {
+        mainSleep = s;
       }
     }
 
@@ -1115,24 +1709,31 @@
     let sleepAvgComfort = null;
     let morningComfort = null;
     let morningFatigue = null;
-    if (sleepStartIdx !== null && sleepEndIdx !== null) {
-      const bbStart = series[sleepStartIdx].bb;
-      const bbEnd = series[sleepEndIdx].bbNext;
-      sleepCharge = bbEnd - bbStart;
-      morningBB = bbEnd;
+    if (mainSleep) {
+      let lastSleepIdx = null;
+      let chargeSum = 0;
+      let comfortSumSleep = 0;
+      let comfortCntSleep = 0;
 
-      let sum = 0;
-      let cnt = 0;
-      for (let i = sleepStartIdx; i <= sleepEndIdx; i++) {
-        const v = series[i].comfortScore;
+      for (let i = mainSleep.startIdx; i <= mainSleep.endIdx; i++) {
+        const r = series[i];
+        if (r.context?.kind !== "SLEEP") continue;
+        lastSleepIdx = i;
+        if (Number.isFinite(r.bb) && Number.isFinite(r.bbNext)) chargeSum += r.bbNext - r.bb;
+        const v = r.comfortScore;
         if (Number.isFinite(v)) {
-          sum += v;
-          cnt += 1;
+          comfortSumSleep += v;
+          comfortCntSleep += 1;
         }
       }
-      sleepAvgComfort = cnt > 0 ? sum / cnt : null;
-      morningComfort = Number.isFinite(series[sleepEndIdx].comfortScore) ? series[sleepEndIdx].comfortScore : null;
-      morningFatigue = Number.isFinite(series[sleepEndIdx].fatigueScore) ? series[sleepEndIdx].fatigueScore : null;
+
+      if (lastSleepIdx !== null) {
+        sleepCharge = chargeSum;
+        morningBB = series[lastSleepIdx].bbNext;
+        sleepAvgComfort = comfortCntSleep > 0 ? comfortSumSleep / comfortCntSleep : null;
+        morningComfort = Number.isFinite(series[lastSleepIdx].comfortScore) ? series[lastSleepIdx].comfortScore : null;
+        morningFatigue = Number.isFinite(series[lastSleepIdx].fatigueScore) ? series[lastSleepIdx].fatigueScore : null;
+      }
     }
 
     const readiness =

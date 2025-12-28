@@ -354,6 +354,13 @@
     return Object.keys(params).length ? params : null;
   }
 
+  function readBehaviorBaselineFromUI() {
+    const enabled = Boolean($("behaviorBaselineEnabled")?.checked);
+    if (!enabled) return null;
+    const days = clamp(numOrNull($("behaviorBaselineDays")?.value) ?? 10, 1, 60);
+    return { enabled: true, days };
+  }
+
   function computeAndRender(cfg) {
     const result = BodyBatteryModel.computeSeries(cfg);
     state.lastResult = result;
@@ -1037,9 +1044,11 @@
       const initialBB = clamp(numOrNull($("initialBB").value) ?? 70, 0, 100);
       const baselines = readBaselinesFromUI();
       const params = readParamsFromUI();
+      const behaviorBaseline = readBehaviorBaselineFromUI();
       const cfg = { epochMinutes, initialBB, epochs };
       if (baselines) cfg.baselines = baselines;
       if (params) cfg.params = params;
+      if (behaviorBaseline) cfg.behaviorBaseline = behaviorBaseline;
 
       $("jsonInput").value = JSON.stringify(cfg, null, 2);
       showError($("jsonError"), null);
@@ -1093,9 +1102,11 @@
         const initialBB = clamp(numOrNull($("initialBB").value) ?? 70, 0, 100);
         const baselines = readBaselinesFromUI();
         const params = readParamsFromUI();
+        const behaviorBaseline = readBehaviorBaselineFromUI();
         const cfg = { epochMinutes, initialBB, epochs };
         if (baselines) cfg.baselines = baselines;
         if (params) cfg.params = params;
+        if (behaviorBaseline) cfg.behaviorBaseline = behaviorBaseline;
         computeAndRender(cfg);
       } catch (err) {
         showError($("segmentsError"), err && err.stack ? err.stack : String(err));
@@ -1119,6 +1130,10 @@
         const initialBB = clamp(numOrNull(obj.initialBB) ?? numOrNull($("initialBB").value) ?? 70, 0, 100);
         const baselines = obj.baselines && typeof obj.baselines === "object" ? obj.baselines : readBaselinesFromUI();
         const params = obj.params && typeof obj.params === "object" ? obj.params : readParamsFromUI();
+        const behaviorBaseline =
+          obj.behaviorBaseline && typeof obj.behaviorBaseline === "object"
+            ? obj.behaviorBaseline
+            : readBehaviorBaselineFromUI();
 
         $("epochMinutes").value = String(epochMinutes);
         $("initialBB").value = String(initialBB);
@@ -1126,6 +1141,7 @@
         const cfg = { epochMinutes, initialBB, epochs: obj.epochs };
         if (baselines) cfg.baselines = baselines;
         if (params) cfg.params = params;
+        if (behaviorBaseline) cfg.behaviorBaseline = behaviorBaseline;
         computeAndRender(cfg);
       } catch (err) {
         showError($("jsonError"), err && err.stack ? err.stack : String(err));

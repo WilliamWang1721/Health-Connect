@@ -1,0 +1,123 @@
+#!/usr/bin/env node
+"use strict";
+
+const assert = require("assert");
+const BodyBatteryModel = require("../src/bodyBatteryModel.js");
+
+function mkWorkoutCfg() {
+  const epochMinutes = 5;
+  const startMs = Date.UTC(2025, 0, 1, 0, 0, 0);
+  const msPerEpoch = epochMinutes * 60000;
+
+  const mk = (i, patch) => ({ timestampMs: startMs + i * msPerEpoch, ...patch });
+
+  return {
+    epochMinutes,
+    initialBB: 70,
+    baselines: {
+      rhrBpm: 60,
+      hrvSdnnMs: 55,
+      spo2Pct: 97,
+      respRateBrpm: 14,
+      wristTempC: 36.55,
+      ftpW: 220,
+      hrMaxBpm: 190,
+    },
+    epochs: [
+      mk(0, {
+        workout: true,
+        hrBpm: 150,
+        steps: 150, // 30 steps/min @ 5min
+        activeEnergyKcal: 45,
+        powerW: 210,
+      }),
+      mk(1, {
+        hrBpm: 70,
+        steps: 0,
+        activeEnergyKcal: 0,
+      }),
+    ],
+  };
+}
+
+const workout = BodyBatteryModel.computeSeries(mkWorkoutCfg()).series;
+assert(workout.length === 2);
+assert.strictEqual(workout[0].context.kind, "WORKOUT");
+assert(workout[0].drainPoints > 0);
+assert(workout[0].drainComponents.loadPerHour > 0);
+assert.notStrictEqual(workout[1].context.kind, "WORKOUT");
+assert(workout[1].drainComponents.loadPerHour <= workout[0].drainComponents.loadPerHour);
+
+// SleepCharge should include multiple sleep segments within the same main sleep session.
+(() => {
+  const epochMinutes = 5;
+  const startMs = Date.UTC(2025, 0, 2, 0, 0, 0);
+  const msPerEpoch = epochMinutes * 60000;
+  const mk = (i, patch) => ({ timestampMs: startMs + i * msPerEpoch, ...patch });
+
+  const cfg = {
+    epochMinutes,
+    initialBB: 50,
+    baselines: {
+      rhrBpm: 60,
+      hrvSdnnMs: 55,
+      spo2Pct: 97,
+      respRateBrpm: 14,
+      wristTempC: 36.55,
+    },
+    epochs: [
+      mk(0, { sleepStage: "core", hrBpm: 55, steps: 0, activeEnergyKcal: 0 }),
+      mk(1, { sleepStage: "core", hrBpm: 55, steps: 0, activeEnergyKcal: 0 }),
+      mk(2, { sleepStage: "awake", hrBpm: 58, steps: 0, activeEnergyKcal: 0 }),
+      mk(3, { sleepStage: "core", hrBpm: 55, steps: 0, activeEnergyKcal: 0 }),
+      mk(4, { sleepStage: "core", hrBpm: 55, steps: 0, activeEnergyKcal: 0 }),
+    ],
+  };
+
+  const result = BodyBatteryModel.computeSeries(cfg);
+  const series = result.series;
+  const summary = result.summary;
+
+  let expectedSleepCharge = 0;
+  let lastSleepIdx = null;
+  for (let i = 0; i < series.length; i++) {
+    const r = series[i];
+    if (r.context?.kind !== "SLEEP") continue;
+    lastSleepIdx = i;
+    expectedSleepCharge += r.bbNext - r.bb;
+  }
+
+  assert(lastSleepIdx !== null, "Expected at least one sleep epoch in test config.");
+
+  assert.strictEqual(summary.sleepCharge, Number(expectedSleepCharge.toFixed(2)), "Expected sleepCharge to include all sleep segments.");
+  assert.strictEqual(summary.morningBB, Number(series[lastSleepIdx].bbNext.toFixed(2)), "Expected morningBB to be end of the last sleep segment.");
+})();
+
+// Missing vitals should reduce sleep charging (quality gating).
+(() => {
+  const epochMinutes = 5;
+  const startMs = Date.UTC(2025, 0, 2, 1, 0, 0);
+  const msPerEpoch = epochMinutes * 60000;
+  const mk = (i, patch) => ({ timestampMs: startMs + i * msPerEpoch, ...patch });
+
+  const mkCfg = (withHr) => ({
+    epochMinutes,
+    initialBB: 70,
+    baselines: {
+      rhrBpm: 60,
+      hrvSdnnMs: 55,
+      spo2Pct: 97,
+      respRateBrpm: 14,
+      wristTempC: 36.55,
+    },
+    epochs: Array.from({ length: 12 }, (_, i) => mk(i, { sleepStage: "core", ...(withHr ? { hrBpm: 55 } : {}) })),
+  });
+
+  const miss = BodyBatteryModel.computeSeries(mkCfg(false)).summary.sleepCharge;
+  const hasHr = BodyBatteryModel.computeSeries(mkCfg(true)).summary.sleepCharge;
+
+  assert(miss !== null && hasHr !== null);
+  assert(miss < hasHr * 0.8, `Expected missing-vitals sleepCharge < 0.8x. got miss=${miss}, hasHr=${hasHr}`);
+})();
+
+console.log("model-smoke-test: OK");
