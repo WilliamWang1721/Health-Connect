@@ -56,3 +56,4 @@ node server.js
 - `epochs` 的最小单位是 **epoch**（例如 5 分钟）；模型会按时间排序计算。
 - 缺失项可以省略或写 `null`；模型会通过质量分与门控降权。
 - `sleepStage` 建议使用：`deep` / `core` / `rem` / `inBed` / `awake`
+- `stateOfMind` / `som`（可选）：心情/压力（SoM）；用于对 `Comfort` 与 `stressRate` 做小幅修正（SoM 优先级高于 HRV）

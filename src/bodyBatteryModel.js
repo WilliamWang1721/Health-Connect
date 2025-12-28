@@ -27,6 +27,57 @@
     return Number.isFinite(n) ? n : null;
   }
 
+  function normalizeScore01(raw) {
+    const n = toNumberOrNull(raw);
+    if (n === null) return null;
+    if (n >= 0 && n <= 1) return clamp(n, 0, 1); // already 0..1
+    if (n >= -1 && n <= 1) return clamp((n + 1) / 2, 0, 1); // -1..1 valence-like
+    if (n >= 1 && n <= 5) return clamp((n - 1) / 4, 0, 1); // 1..5 Likert
+    if (n >= 0 && n <= 10) return clamp(n / 10, 0, 1); // 0..10
+    if (n >= 0 && n <= 100) return clamp(n / 100, 0, 1); // 0..100
+    return null;
+  }
+
+  function rampUp01(value01, start01, full01) {
+    if (!Number.isFinite(value01)) return null;
+    const s = clamp(Number(start01), 0, 1);
+    const f = clamp(Number(full01), 0, 1);
+    if (f <= s) return value01 >= s ? 1 : 0;
+    return clamp((value01 - s) / (f - s), 0, 1);
+  }
+
+  function rampDown01(value01, start01, full01) {
+    if (!Number.isFinite(value01)) return null;
+    const s = clamp(Number(start01), 0, 1);
+    const f = clamp(Number(full01), 0, 1);
+    if (s <= f) return value01 <= s ? 1 : 0;
+    return clamp((s - value01) / (s - f), 0, 1);
+  }
+
+  function parseStateOfMind(epoch) {
+    const raw = epoch?.stateOfMind ?? epoch?.som ?? null;
+    if (raw === null || raw === undefined || raw === "") return null;
+
+    if (typeof raw === "object") {
+      const valenceRaw =
+        raw.valence ?? raw.pleasantness ?? raw.mood ?? raw.score ?? raw.value ?? raw.valence01 ?? null;
+      const stressRaw = raw.stress ?? raw.pressure ?? raw.anxiety ?? raw.arousal ?? raw.stress01 ?? null;
+      const parsed = {
+        valence01: normalizeScore01(valenceRaw),
+        stress01: normalizeScore01(stressRaw),
+      };
+      if (parsed.valence01 === null && parsed.stress01 === null) return null;
+      return parsed;
+    }
+
+    const parsed = {
+      valence01: normalizeScore01(raw),
+      stress01: null,
+    };
+    if (parsed.valence01 === null) return null;
+    return parsed;
+  }
+
   function asPercentMaybe(value) {
     const n = toNumberOrNull(value);
     if (n === null) return null;
@@ -171,6 +222,16 @@
       stressDrainMaxPerHour: 14,
       anomDrainPerIndexPerHour: 2.5,
       anomDrainMaxPerHour: 10,
+      // Stress/Mood (State of Mind / HRV) — used for comfort & mild drain
+      somPriorityWeight: 0.75, // higher => SoM dominates over HRV when both exist
+      somLowMoodStart01: 0.45,
+      somLowMoodFull01: 0.2,
+      somHighStressStart01: 0.6,
+      somHighStressFull01: 0.9,
+      somStressIndexMax: 1.2, // maps SoM strain(0..1) -> stressFromSom (z-like scale)
+      mindStrainFromHrvStartZ: 0.4, // on (-zHrv)
+      mindStrainFromHrvFullZ: 1.6, // on (-zHrv)
+      mindComfortPenaltyMaxPoints: 8, // max comfort reduction when mindStrain01=1
       // Wrist Skin Temperature (WST) — dual-mechanism handling:
       // - Sleep-onset mild elevation can be beneficial (heat loss / sleep initiation)
       // - Sustained elevation + co-signals suggests heat stress / inflammation-like state
@@ -279,6 +340,8 @@
     const steps = toNumberOrNull(epoch.steps);
     const energy = toNumberOrNull(epoch.activeEnergyKcal ?? epoch.activeEnergy ?? epoch.energyKcal);
     const power = toNumberOrNull(epoch.powerW ?? epoch.power);
+    const somRaw = epoch.stateOfMind ?? epoch.som ?? null;
+    const somPresent = somRaw !== null && somRaw !== undefined && somRaw !== "";
 
     const q = {
       hr: scoreQuality01(hr, 30, 220),
@@ -289,6 +352,7 @@
       steps: steps === null ? 0 : steps >= 0 ? 1 : 0.2,
       energy: energy === null ? 0 : energy >= 0 ? 1 : 0.2,
       power: power === null ? 0 : power >= 0 && power <= 2000 ? 1 : 0.2,
+      som: somPresent ? 1 : 0,
     };
 
     if (baselines?.wristTempBaselineDays !== null && baselines?.wristTempBaselineDays !== undefined) {
@@ -402,6 +466,8 @@
     const steps = toNumberOrNull(epoch.steps);
     const activeEnergy = toNumberOrNull(epoch.activeEnergyKcal ?? epoch.activeEnergy ?? epoch.energyKcal);
     const power = toNumberOrNull(epoch.powerW ?? epoch.power);
+    const som = parseStateOfMind(epoch);
+    const qSom = clamp(Number(q?.som ?? (som ? 1 : 0)), 0, 1);
 
     const rhr = Number(baselines.rhrBpm);
     const hrMax = Number(baselines.hrMaxBpm);
@@ -576,7 +642,36 @@
       Number.isFinite(rhr)
         ? relu((hr - (rhr + 5)) / 5)
         : 0;
-    const stressIndex = clamp(0.8 * stressFromHrv + 0.4 * stressFromHr + 0.2 * restElev, 0, 5);
+
+    const somLowMood01 =
+      som?.valence01 === null || som?.valence01 === undefined
+        ? null
+        : rampDown01(som.valence01, params.somLowMoodStart01, params.somLowMoodFull01);
+    const somHighStress01 =
+      som?.stress01 === null || som?.stress01 === undefined
+        ? null
+        : rampUp01(som.stress01, params.somHighStressStart01, params.somHighStressFull01);
+    const somStrain01Raw = Math.max(Number(somLowMood01 ?? 0), Number(somHighStress01 ?? 0));
+    const somStrain01 = som ? clamp(somStrain01Raw * qSom, 0, 1) : null;
+
+    const mindStartZ = clamp(Number(params.mindStrainFromHrvStartZ ?? 0.4), 0, 4);
+    const mindFullZ = clamp(Number(params.mindStrainFromHrvFullZ ?? 1.6), mindStartZ + 1e-6, 6);
+    const hrvStrain01 =
+      zHrv === null
+        ? null
+        : clamp(((relu(-zHrv) - mindStartZ) / (mindFullZ - mindStartZ)) * clamp(Number(q.hrv ?? 0), 0, 1), 0, 1);
+
+    const somW = clamp(Number(params.somPriorityWeight ?? 0.75), 0, 1);
+    const mindStrain01 =
+      somStrain01 !== null
+        ? clamp(somW * somStrain01 + (1 - somW) * Number(hrvStrain01 ?? 0), 0, 1)
+        : clamp(Number(hrvStrain01 ?? 0), 0, 1);
+
+    const somStressIndexMax = clamp(Number(params.somStressIndexMax ?? 1.2), 0, 5);
+    const stressFromSom = somStrain01 === null ? 0 : somStrain01 * somStressIndexMax;
+    const stressFromMind = somStrain01 === null ? stressFromHrv : somW * stressFromSom + (1 - somW) * stressFromHrv;
+
+    const stressIndex = clamp(0.8 * stressFromMind + 0.4 * stressFromHr + 0.2 * restElev, 0, 5);
     const stressRate = clamp(
       params.stressDrainPerIndexPerHour * stressIndex,
       0,
@@ -600,11 +695,28 @@
     const thermalDiscomfortIndex = tempOverheatIndex + 0.6 * tempFeverIndex;
     const discomfortIndex = thermalDiscomfortIndex + 0.5 * respDiscomfortIndex;
     const comfortPenaltyPerIndex = clamp(Number(params.comfortPenaltyPerIndex ?? 12), 0, 50);
-    const comfortScore = clamp(100 - comfortPenaltyPerIndex * discomfortIndex, 0, 100);
+    const mindComfortPenaltyMaxPoints = clamp(Number(params.mindComfortPenaltyMaxPoints ?? 8), 0, 30);
+    const comfortScore = clamp(
+      100 - comfortPenaltyPerIndex * discomfortIndex - mindComfortPenaltyMaxPoints * mindStrain01,
+      0,
+      100,
+    );
 
     return {
-      values: { hr, hrv, spo2, rr, temp, steps, activeEnergy, power },
+      values: { hr, hrv, spo2, rr, temp, steps, activeEnergy, power, stateOfMind: epoch.stateOfMind ?? epoch.som ?? null },
       z: { zHrv },
+      mind: {
+        somValence01: som?.valence01 ?? null,
+        somStress01: som?.stress01 ?? null,
+        somLowMood01,
+        somHighStress01,
+        somStrain01,
+        hrvStrain01,
+        mindStrain01,
+        stressFromHrv,
+        stressFromSom,
+        stressFromMind,
+      },
       activity: {
         stepsPerMin,
         energyPerMin,

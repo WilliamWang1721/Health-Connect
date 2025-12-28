@@ -168,6 +168,7 @@
       tr.appendChild(mkInputTd("durationMin", "min", "1"));
       tr.appendChild(mkInputTd("hrBpm", "bpm", "0.1"));
       tr.appendChild(mkInputTd("hrvSdnnMs", "ms", "0.1"));
+      tr.appendChild(mkInputTd("stateOfMind", "0~1/100", "0.01"));
       tr.appendChild(mkInputTd("stepsPerMin", "步/分", "0.1"));
       tr.appendChild(mkInputTd("activeEnergyPerMin", "kcal/分", "0.1"));
       tr.appendChild(mkInputTd("powerW", "W", "1"));
@@ -248,6 +249,7 @@
           timestampMs: cursor,
           hrBpm: numOrNull(seg.hrBpm),
           hrvSdnnMs: numOrNull(seg.hrvSdnnMs),
+          stateOfMind: numOrNull(seg.stateOfMind),
           steps: stepsPerMin === null ? null : Math.round(stepsPerMin * dtMin),
           activeEnergyKcal: energyPerMin === null ? null : energyPerMin * dtMin,
           powerW: numOrNull(seg.powerW),
@@ -482,13 +484,13 @@
       { type: "sleep_deep", durationMin: 70, hrBpm: 50, hrvSdnnMs: 75, spo2Pct: 97.5, respRateBrpm: 12.8, wristTempC: 36.55 },
       { type: "sleep_core", durationMin: 120, hrBpm: 55, hrvSdnnMs: 62, spo2Pct: 97.2, respRateBrpm: 13.6, wristTempC: 36.6 },
       { type: "sleep_rem", durationMin: 60, hrBpm: 59, hrvSdnnMs: 52, spo2Pct: 97, respRateBrpm: 14.7, wristTempC: 36.62 },
-      { type: "awake_rest", durationMin: 45, hrBpm: 60, stepsPerMin: 0, activeEnergyPerMin: 0.2 },
+      { type: "awake_rest", durationMin: 45, hrBpm: 60, stepsPerMin: 0, activeEnergyPerMin: 0.2, stateOfMind: 0.75 },
       { type: "light", durationMin: 120, hrBpm: 92, stepsPerMin: 55, activeEnergyPerMin: 2 },
       { type: "workout", durationMin: 45, hrBpm: 152, stepsPerMin: 30, activeEnergyPerMin: 9.5, powerW: 215 },
       { type: "active", durationMin: 90, hrBpm: 112, stepsPerMin: 85, activeEnergyPerMin: 4 },
       { type: "awake_rest", durationMin: 60, hrBpm: 64, stepsPerMin: 0, activeEnergyPerMin: 0.25 },
       { type: "light", durationMin: 180, hrBpm: 88, stepsPerMin: 45, activeEnergyPerMin: 1.6 },
-      { type: "awake", durationMin: 180, hrBpm: 74, stepsPerMin: 5, activeEnergyPerMin: 0.8 },
+      { type: "awake", durationMin: 180, hrBpm: 74, stepsPerMin: 5, activeEnergyPerMin: 0.8, stateOfMind: 0.28 },
     ];
 
     renderSegments();
