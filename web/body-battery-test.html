@@ -3,7 +3,7 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>Body Battery Sandbox (Reserve/Comfort/Fatigue v0)</title>
+    <title>Body Battery Sandbox (Reserve/Comfort/Fatigue v0.2)</title>
     <style>
       :root {
         --bg: #0b1220;
@@ -454,7 +454,7 @@
   </head>
   <body>
     <header>
-      <h1>Body Battery Sandbox (Reserve / Comfort / Fatigue v0)</h1>
+      <h1>Body Battery Sandbox (Reserve / Comfort / Fatigue v0.2)</h1>
       <p>
         Offline sandbox: input simulated data (or paste JSON) to estimate the Reserve(BB) curve, Comfort/Fatigue, and
         Charge/Drain/Confidence. Output is for wellness insight only, not medical diagnosis.
@@ -467,9 +467,9 @@
         <h2 id="upgradeTitle">Update Notes</h2>
         <p class="hint" id="upgradeVersion"></p>
         <ul>
-          <li>Chunked parsing for large export.xml (local) + progress bar</li>
-          <li>Add mood and stress impact on comfort scoring</li>
-          <li>Add energy rating impact on workout drain</li>
+          <li>Three-kernel mode (Core + Neural trend + Hybrid blend)</li>
+          <li>Optional forecast extension (experimental; Reserve only)</li>
+          <li>Tooltip shows Core/Trend vs Hybrid output</li>
         </ul>
         <div class="actions">
           <button id="upgradeModalClose" class="primary">Got it</button>
@@ -510,6 +510,22 @@
             The model builds a personal baseline from the first N days of sleep/workout behavior, then from day N+1
             scales recovery/drain for unusual behaviors (e.g. sleep duration outside generic health ranges but within
             your personal baseline will not be discounted).
+          </p>
+        </details>
+
+        <details>
+          <summary>Three-kernel mode (Core + Neural trend, experimental)</summary>
+          <div class="row two" style="margin-top: 10px">
+            <label class="checkbox"><input id="threeKernelEnabled" type="checkbox" />Enable three-kernel mode</label>
+            <label>Forecast hours<input id="threeKernelForecastHours" type="number" min="0" step="1" value="0" /></label>
+          </div>
+          <div class="row two" style="margin-top: 10px">
+            <label>Core weight<input id="threeKernelWeightCore" type="number" min="0" max="1" step="0.01" value="0.9" /></label>
+            <label>Trend weight<input id="threeKernelWeightTrend" type="number" min="0" max="1" step="0.01" value="0.1" /></label>
+          </div>
+          <p class="hint" style="margin-top: 8px">
+            Core = current rule-based model. Trend = tiny neural forecast trained on prior BB deltas. Hybrid = weighted
+            blend (weights are normalized).
           </p>
         </details>
 

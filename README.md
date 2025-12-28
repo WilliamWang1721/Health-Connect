@@ -25,6 +25,7 @@ node server.js
 ## 代码位置
 
 - 目标定义：`docs/body-battery.md`
+- 版本说明：`docs/release-v0.2.0.md`
 - 主干模型（Layer B + 质量门控/动态权重的规则先验）：`src/bodyBatteryModel.js`
 - 测试页：`web/body-battery-test.html`、`web/app.js`
 
@@ -61,3 +62,4 @@ node server.js
 - `params.sleepChargeDurationWeight`（默认 `0.8`）：降低“睡眠时长”对 BB 充电的权重
 - `params.sleepRecoveryExponent`（默认 `1.6`）：提高“睡眠质量”（HR/HRV/睡眠阶段/RR/体温等）对睡眠恢复效率的权重
 - `behaviorBaseline`（可选）：当 `enabled=true` 且数据覆盖至少 `days` 天时，模型会用前 `days` 天游程构建睡眠/训练等“个人行为基线”，并从第 `days+1` 天游程起动态调整动作对 BB 的影响幅度。
+- `threeKernel`（可选）：启用“三内核”混合输出（Core=规则主干，Trend=小型神经趋势，Hybrid=按权重融合）。示例：`{ "enabled": true, "weightCore": 0.9, "weightTrend": 0.1, "forecastHours": 0 }`

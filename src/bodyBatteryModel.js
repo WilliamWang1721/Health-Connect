@@ -9,7 +9,7 @@
 })(typeof self !== "undefined" ? self : this, function () {
   "use strict";
 
-  const VERSION = "0.1.1";
+  const VERSION = "0.2.0";
 
   function clamp(value, min, max) {
     if (!Number.isFinite(value)) return min;
@@ -96,6 +96,23 @@
     if (!Number.isFinite(a) || !Number.isFinite(b)) return a;
     const tt = clamp(Number(t), 0, 1);
     return a + (b - a) * tt;
+  }
+
+  function tanh(x) {
+    const v = Number(x);
+    if (!Number.isFinite(v)) return 0;
+    if (Math.tanh) return Math.tanh(v);
+    const e2x = Math.exp(2 * v);
+    if (!Number.isFinite(e2x) || e2x === 0) return v > 0 ? 1 : -1;
+    return (e2x - 1) / (e2x + 1);
+  }
+
+  function makeLcgRng(seed) {
+    let s = (Number(seed) || 0) >>> 0;
+    return function rand01() {
+      s = (s * 1664525 + 1013904223) >>> 0;
+      return s / 4294967296;
+    };
   }
 
   function parseTimestampMs(epoch) {
@@ -1751,6 +1768,393 @@
     };
   }
 
+  function readThreeKernelConfig(userConfig) {
+    const raw = userConfig?.threeKernel;
+    if (!raw || typeof raw !== "object") return { enabled: false };
+    const enabled = Boolean(raw.enabled ?? raw.enable ?? raw.on);
+    if (!enabled) return { enabled: false };
+
+    const wCore0 = toNumberOrNull(raw.weightCore ?? raw.wCore ?? raw.w1 ?? 0.9) ?? 0.9;
+    const wTrend0 = toNumberOrNull(raw.weightTrend ?? raw.wTrend ?? raw.w2 ?? 0.1) ?? 0.1;
+    const sum = Math.max(1e-6, wCore0 + wTrend0);
+    const weightCore = clamp(wCore0 / sum, 0, 1);
+    const weightTrend = clamp(wTrend0 / sum, 0, 1);
+
+    const forecastHours = clamp(toNumberOrNull(raw.forecastHours ?? raw.horizonHours) ?? 0, 0, 168);
+
+    const binMinutes = clamp(toNumberOrNull(raw.binMinutes) ?? 60, 10, 240);
+    const minTrainSamples = clamp(toNumberOrNull(raw.minTrainSamples) ?? 240, 50, 5000);
+    const maxTrainSamples = clamp(toNumberOrNull(raw.maxTrainSamples) ?? 4000, 200, 20000);
+
+    const hiddenSize = clamp(toNumberOrNull(raw.hiddenSize) ?? 8, 2, 32);
+    const epochs = clamp(toNumberOrNull(raw.trainEpochs) ?? 40, 1, 400);
+    const learningRate = clamp(toNumberOrNull(raw.learningRate) ?? 0.03, 0.001, 0.2);
+    const l2 = clamp(toNumberOrNull(raw.l2) ?? 0.0008, 0, 0.05);
+
+    return {
+      enabled: true,
+      weightCore,
+      weightTrend,
+      forecastHours,
+      binMinutes,
+      minTrainSamples,
+      maxTrainSamples,
+      hiddenSize,
+      epochs,
+      learningRate,
+      l2,
+    };
+  }
+
+  function dayBinIndex(tsMs, binMinutes) {
+    if (!Number.isFinite(tsMs)) return 0;
+    const d = new Date(tsMs);
+    const minutes = d.getHours() * 60 + d.getMinutes() + d.getSeconds() / 60;
+    const binMin = Math.max(1, Number(binMinutes) || 60);
+    const bins = Math.max(1, Math.round((24 * 60) / binMin));
+    const idx = Math.floor(minutes / binMin);
+    return clamp(idx, 0, bins - 1);
+  }
+
+  function buildSleepProbByBin(series, binMinutes) {
+    const binMin = Math.max(1, Number(binMinutes) || 60);
+    const bins = Math.max(1, Math.round((24 * 60) / binMin));
+    const total = new Array(bins).fill(0);
+    const sleep = new Array(bins).fill(0);
+
+    for (const r of series || []) {
+      const ts = Number(r?.tsMs);
+      if (!Number.isFinite(ts)) continue;
+      const b = dayBinIndex(ts, binMin);
+      total[b] += 1;
+      if (r?.context?.kind === "SLEEP") sleep[b] += 1;
+    }
+
+    const alpha = 1;
+    const out = new Array(bins).fill(0);
+    for (let i = 0; i < bins; i++) {
+      const t = total[i];
+      const s = sleep[i];
+      out[i] = (s + alpha) / (t + 2 * alpha);
+    }
+    return { binMinutes: binMin, pSleep: out };
+  }
+
+  function buildMeanDeltaNormByBin(series, params, binMinutes) {
+    const binMin = Math.max(1, Number(binMinutes) || 60);
+    const bins = Math.max(1, Math.round((24 * 60) / binMin));
+    const sum = new Array(bins).fill(0);
+    const wsum = new Array(bins).fill(0);
+
+    const maxDeltaPerHour = Number(params?.maxDeltaPerHour ?? 0);
+    if (!Number.isFinite(maxDeltaPerHour) || maxDeltaPerHour <= 0) {
+      return { binMinutes: binMin, meanDeltaNorm: new Array(bins).fill(0) };
+    }
+
+    for (const r of series || []) {
+      const ts = Number(r?.tsMs);
+      if (!Number.isFinite(ts)) continue;
+      const dtMin = Number(r?.dtMinutes ?? params?.epochMinutes ?? 5);
+      if (!Number.isFinite(dtMin) || dtMin <= 0) continue;
+      const dtHours = dtMin / 60;
+      const maxDelta = maxDeltaPerHour * dtHours;
+      if (!Number.isFinite(maxDelta) || maxDelta <= 1e-6) continue;
+
+      const bb0 = Number(r?.bb);
+      const bb1 = Number(r?.bbNext);
+      if (!Number.isFinite(bb0) || !Number.isFinite(bb1)) continue;
+      const y = clamp((bb1 - bb0) / maxDelta, -1, 1);
+
+      const w = clamp(Number(r?.confidence ?? 0.6), 0, 1);
+      const b = dayBinIndex(ts, binMin);
+      sum[b] += y * w;
+      wsum[b] += w;
+    }
+
+    const out = new Array(bins).fill(0);
+    for (let i = 0; i < bins; i++) {
+      out[i] = wsum[i] > 1e-6 ? sum[i] / wsum[i] : 0;
+    }
+    return { binMinutes: binMin, meanDeltaNorm: out };
+  }
+
+  function trendFeatureVector(bb, lastDeltaNorm, tsMs, sleepProbByBin) {
+    const bb01 = clamp(Number(bb) / 100, 0, 1);
+    const bbC = bb01 * 2 - 1;
+    const d = Number.isFinite(tsMs) ? new Date(tsMs) : null;
+    const minutes = d ? d.getHours() * 60 + d.getMinutes() + d.getSeconds() / 60 : 0;
+    const phase = (2 * Math.PI * minutes) / (24 * 60);
+    const sinT = Math.sin(phase);
+    const cosT = Math.cos(phase);
+    const dow = d ? d.getDay() : 0;
+    const phaseW = (2 * Math.PI * dow) / 7;
+    const sinW = Math.sin(phaseW);
+    const cosW = Math.cos(phaseW);
+
+    const idx = sleepProbByBin ? dayBinIndex(tsMs, sleepProbByBin.binMinutes) : 0;
+    const pSleep = sleepProbByBin && Array.isArray(sleepProbByBin.pSleep) ? Number(sleepProbByBin.pSleep[idx]) : 0.5;
+    const pSleepC = clamp(pSleep, 0, 1) * 2 - 1;
+
+    const dNorm = clamp(Number(lastDeltaNorm) || 0, -1, 1);
+    return [1, bbC, dNorm, sinT, cosT, pSleepC, sinW, cosW];
+  }
+
+  function shuffleInPlace(arr, rand01) {
+    for (let i = arr.length - 1; i > 0; i--) {
+      const j = Math.floor(rand01() * (i + 1));
+      const tmp = arr[i];
+      arr[i] = arr[j];
+      arr[j] = tmp;
+    }
+  }
+
+  function trainTinyTrendNet(samples, cfg, seed) {
+    if (!Array.isArray(samples) || samples.length === 0) return null;
+    const inputDim = samples[0].x.length;
+    const hidden = Math.max(2, Number(cfg?.hiddenSize) || 8);
+    const rng = makeLcgRng(seed);
+
+    const W1 = [];
+    for (let h = 0; h < hidden; h++) {
+      const row = [];
+      for (let j = 0; j < inputDim; j++) row.push((rng() - 0.5) * 0.2);
+      W1.push(row);
+    }
+    const b1 = new Array(hidden).fill(0);
+    const W2 = new Array(hidden).fill(0).map(() => (rng() - 0.5) * 0.2);
+    let b2 = 0;
+
+    const epochs = Math.max(1, Number(cfg?.epochs) || 40);
+    const lr0 = Math.max(1e-6, Number(cfg?.learningRate) || 0.03);
+    const l2 = clamp(Number(cfg?.l2) || 0, 0, 0.2);
+
+    const order = samples.map((_, i) => i);
+
+    for (let ep = 0; ep < epochs; ep++) {
+      shuffleInPlace(order, rng);
+      const lr = lr0 / (1 + ep * 0.03);
+
+      for (let t = 0; t < order.length; t++) {
+        const s = samples[order[t]];
+        const x = s.x;
+        const target = Number(s.y);
+        const weight = clamp(Number(s.w ?? 1), 0, 1);
+        if (!Number.isFinite(target) || weight <= 0) continue;
+
+        const a1 = new Array(hidden);
+        for (let h = 0; h < hidden; h++) {
+          let z = b1[h];
+          const wRow = W1[h];
+          for (let j = 0; j < inputDim; j++) z += wRow[j] * x[j];
+          a1[h] = tanh(z);
+        }
+
+        let z2 = b2;
+        for (let h = 0; h < hidden; h++) z2 += W2[h] * a1[h];
+        const yPred = tanh(z2);
+
+        const err = (yPred - target) * weight;
+        const dz2 = 2 * err * (1 - yPred * yPred);
+
+        const w2Old = W2.slice();
+        for (let h = 0; h < hidden; h++) {
+          const g = dz2 * a1[h] + l2 * W2[h];
+          W2[h] -= lr * g;
+        }
+        b2 -= lr * dz2;
+
+        for (let h = 0; h < hidden; h++) {
+          const da = dz2 * w2Old[h];
+          const dz1 = da * (1 - a1[h] * a1[h]);
+          const wRow = W1[h];
+          for (let j = 0; j < inputDim; j++) wRow[j] -= lr * (dz1 * x[j] + l2 * wRow[j]);
+          b1[h] -= lr * dz1;
+        }
+      }
+    }
+
+    function predictDeltaNorm(x) {
+      if (!Array.isArray(x) || x.length !== inputDim) return 0;
+      const a1 = new Array(hidden);
+      for (let h = 0; h < hidden; h++) {
+        let z = b1[h];
+        const wRow = W1[h];
+        for (let j = 0; j < inputDim; j++) z += wRow[j] * x[j];
+        a1[h] = tanh(z);
+      }
+      let z2 = b2;
+      for (let h = 0; h < hidden; h++) z2 += W2[h] * a1[h];
+      return clamp(tanh(z2), -1, 1);
+    }
+
+    return { inputDim, hidden, predictDeltaNorm };
+  }
+
+  function computeSeriesThreeKernel(userConfig) {
+    const cfg = readThreeKernelConfig(userConfig);
+    const base = computeSeries(userConfig);
+    if (!cfg.enabled) return base;
+
+    const series = Array.isArray(base?.series) ? base.series : [];
+    const params = base?.params || {};
+
+    const summaryCore = base.summary;
+
+    const sleepProb = buildSleepProbByBin(series, cfg.binMinutes);
+    const meanDeltaByBin = buildMeanDeltaNormByBin(series, params, cfg.binMinutes);
+
+    const samples = [];
+    const maxDeltaPerHour = Number(params?.maxDeltaPerHour ?? 0);
+    for (let i = 0; i < series.length; i++) {
+      const r = series[i];
+      const dtMin = Number(r?.dtMinutes ?? params?.epochMinutes ?? 5);
+      if (!Number.isFinite(dtMin) || dtMin <= 0) continue;
+      const dtHours = dtMin / 60;
+      const maxDelta = maxDeltaPerHour * dtHours;
+      if (!Number.isFinite(maxDelta) || maxDelta <= 1e-6) continue;
+
+      const bb0 = Number(r?.bb);
+      const bb1 = Number(r?.bbNext);
+      if (!Number.isFinite(bb0) || !Number.isFinite(bb1)) continue;
+
+      const y = clamp((bb1 - bb0) / maxDelta, -1, 1);
+      const lastDeltaNorm =
+        i === 0
+          ? 0
+          : (() => {
+              const prev = series[i - 1];
+              const prevDt = Number(prev?.dtMinutes ?? params?.epochMinutes ?? 5);
+              const prevMaxDelta = maxDeltaPerHour * (prevDt / 60);
+              if (!Number.isFinite(prevMaxDelta) || prevMaxDelta <= 1e-6) return 0;
+              const d = Number(prev?.bbNext) - Number(prev?.bb);
+              return clamp(d / prevMaxDelta, -1, 1);
+            })();
+      const x = trendFeatureVector(bb0, lastDeltaNorm, r?.tsMs ?? null, sleepProb);
+      const w = clamp(Number(r?.confidence ?? 0.6), 0, 1);
+      samples.push({ x, y, w });
+    }
+
+    let trainSamples = samples;
+    if (trainSamples.length > cfg.maxTrainSamples) {
+      const stride = Math.max(1, Math.floor(trainSamples.length / cfg.maxTrainSamples));
+      const down = [];
+      for (let i = 0; i < trainSamples.length; i += stride) down.push(trainSamples[i]);
+      trainSamples = down;
+    }
+
+    const seed =
+      ((Number(series?.[0]?.tsMs ?? 0) || 0) ^
+        (Number(series?.[series.length - 1]?.tsMs ?? 0) || 0) ^
+        (series.length * 2654435761)) >>>
+      0;
+
+    const trained = trainSamples.length >= cfg.minTrainSamples;
+    const model = trained ? trainTinyTrendNet(trainSamples, cfg, seed) : null;
+
+    let bbTrend = clamp(Number(params?.initialBB ?? 70), 0, 100);
+    let lastDeltaNorm = 0;
+
+    for (let i = 0; i < series.length; i++) {
+      const r = series[i];
+      const dtMin = Number(r?.dtMinutes ?? params?.epochMinutes ?? 5);
+      const dtHours = Number.isFinite(dtMin) && dtMin > 0 ? dtMin / 60 : (Number(params?.epochMinutes ?? 5) || 5) / 60;
+      const maxDelta = maxDeltaPerHour * dtHours;
+
+      const tsMs = r?.tsMs ?? null;
+      const x = trendFeatureVector(bbTrend, lastDeltaNorm, tsMs, sleepProb);
+      const bin = dayBinIndex(Number.isFinite(tsMs) ? Number(tsMs) : 0, meanDeltaByBin.binMinutes);
+      const fallback = Number(meanDeltaByBin.meanDeltaNorm?.[bin] ?? 0) || 0;
+      const yPred = model ? model.predictDeltaNorm(x) : clamp(fallback, -1, 1);
+      const delta = Number.isFinite(maxDelta) ? yPred * maxDelta : 0;
+      const bbTrendNext = clamp(bbTrend + delta, 0, 100);
+
+      r.bbCore = r.bb;
+      r.bbCoreNext = r.bbNext;
+      r.deltaCoreCore = r.deltaCore;
+
+      r.bbTrend = bbTrend;
+      r.bbTrendNext = bbTrendNext;
+
+      const bbHybrid = cfg.weightCore * Number(r.bbCore) + cfg.weightTrend * bbTrend;
+      const bbHybridNext = cfg.weightCore * Number(r.bbCoreNext) + cfg.weightTrend * bbTrendNext;
+
+      r.bb = clamp(bbHybrid, 0, 100);
+      r.bbNext = clamp(bbHybridNext, 0, 100);
+      r.reserveScore = r.bbNext;
+      r.deltaCore = r.bbNext - r.bb;
+
+      lastDeltaNorm = maxDelta > 1e-6 ? clamp((bbTrendNext - bbTrend) / maxDelta, -1, 1) : 0;
+      bbTrend = bbTrendNext;
+    }
+
+    const epochMinutes = Number(params?.epochMinutes ?? 5) || 5;
+    const forecastEpochs = Math.max(0, Math.round((cfg.forecastHours * 60) / epochMinutes));
+    if (forecastEpochs > 0) {
+      const dtMin = epochMinutes;
+      const dtHours = dtMin / 60;
+      const maxDelta = maxDeltaPerHour * dtHours;
+      const dtMs = dtMin * 60000;
+      const lastTs = Number(series?.[series.length - 1]?.tsMs);
+      const startTs = Number.isFinite(lastTs) ? lastTs : null;
+
+      for (let k = 0; k < forecastEpochs; k++) {
+        const tsMs = startTs === null ? null : startTs + (k + 1) * dtMs;
+        const x = trendFeatureVector(bbTrend, lastDeltaNorm, tsMs, sleepProb);
+        const bin = dayBinIndex(Number.isFinite(tsMs) ? Number(tsMs) : 0, meanDeltaByBin.binMinutes);
+        const fallback = Number(meanDeltaByBin.meanDeltaNorm?.[bin] ?? 0) || 0;
+        const yPred = model ? model.predictDeltaNorm(x) : clamp(fallback, -1, 1);
+        const delta = Number.isFinite(maxDelta) ? yPred * maxDelta : 0;
+        const bbTrendNext = clamp(bbTrend + delta, 0, 100);
+
+        const bbHybrid = bbTrend;
+        const bbHybridNext = bbTrendNext;
+
+        series.push({
+          i: series.length,
+          tsMs,
+          iso: tsMs === null ? null : new Date(tsMs).toISOString(),
+          dtMinutes: dtMin,
+          bbCore: null,
+          bbCoreNext: null,
+          bbTrend: bbTrend,
+          bbTrendNext: bbTrendNext,
+          bb: bbHybrid,
+          bbNext: bbHybridNext,
+          reserveScore: bbHybridNext,
+          comfortScore: null,
+          fatigueScore: null,
+          deltaCore: bbHybridNext - bbHybrid,
+          deltaCoreCore: null,
+          chargePoints: 0,
+          drainPoints: 0,
+          chargePerHour: 0,
+          drainPerHour: 0,
+          confidence: 0,
+          context: { kind: "FORECAST" },
+        });
+
+        lastDeltaNorm = maxDelta > 1e-6 ? clamp((bbTrendNext - bbTrend) / maxDelta, -1, 1) : 0;
+        bbTrend = bbTrendNext;
+      }
+    }
+
+    base.summaryCore = summaryCore;
+    base.summary = summarize(series);
+    base.threeKernel = {
+      enabled: true,
+      weights: { core: cfg.weightCore, trend: cfg.weightTrend },
+      forecastHours: cfg.forecastHours,
+      trend: {
+        trained,
+        samples: trainSamples.length,
+        binMinutes: cfg.binMinutes,
+        model: trained ? { kind: "tiny-mlp", inputDim: model?.inputDim ?? null, hidden: model?.hidden ?? null } : null,
+      },
+    };
+
+    return base;
+  }
+
   function summarize(series) {
     if (!Array.isArray(series) || series.length === 0) {
       return {
@@ -1927,5 +2331,6 @@
     defaultBaselines,
     inferBaselinesFromEpochs,
     computeSeries,
+    computeSeriesThreeKernel,
   };
 });

@@ -86,7 +86,7 @@
     wrap.setAttribute("aria-valuenow", String(Math.round(p)));
   }
 
-  const UPGRADE_ID = "2025-12-28";
+  const UPGRADE_ID = "v0.2.0";
   const UPGRADE_STORAGE_KEY = "bb_upgrade_seen";
 
   function maybeShowUpgradeModal() {
@@ -399,8 +399,30 @@
     return { enabled: true, days };
   }
 
+  function readThreeKernelFromUI() {
+    const enabled = Boolean($("threeKernelEnabled")?.checked);
+    if (!enabled) return null;
+
+    const wCore0 = clamp(numOrNull($("threeKernelWeightCore")?.value) ?? 0.9, 0, 1);
+    const wTrend0 = clamp(numOrNull($("threeKernelWeightTrend")?.value) ?? 0.1, 0, 1);
+    const sum = Math.max(1e-6, wCore0 + wTrend0);
+
+    const forecastHours = clamp(numOrNull($("threeKernelForecastHours")?.value) ?? 0, 0, 168);
+
+    return {
+      enabled: true,
+      weightCore: wCore0 / sum,
+      weightTrend: wTrend0 / sum,
+      forecastHours,
+    };
+  }
+
   function computeAndRender(cfg) {
-    const result = BodyBatteryModel.computeSeries(cfg);
+    const uiThreeKernel = readThreeKernelFromUI();
+    if (!cfg.threeKernel && uiThreeKernel) cfg.threeKernel = uiThreeKernel;
+
+    const useThreeKernel = Boolean(cfg?.threeKernel?.enabled) && typeof BodyBatteryModel.computeSeriesThreeKernel === "function";
+    const result = useThreeKernel ? BodyBatteryModel.computeSeriesThreeKernel(cfg) : BodyBatteryModel.computeSeries(cfg);
     state.lastResult = result;
     renderResult(result);
   }
@@ -677,8 +699,10 @@
 
     const netPerHour = Number(row.chargePerHour ?? 0) - Number(row.drainPerHour ?? 0);
 
-    const lines = [
-      ["Reserve", fmt(row.bbNext, 1)],
+    const lines = [["Reserve", fmt(row.bbNext, 1)]];
+    if (Number.isFinite(row.bbCoreNext)) lines.push(["Core", fmt(row.bbCoreNext, 1)]);
+    if (Number.isFinite(row.bbTrendNext)) lines.push(["Trend", fmt(row.bbTrendNext, 1)]);
+    lines.push(
       ["Comfort", fmtInt(row.comfortScore)],
       ["Fatigue", fmtInt(row.fatigueScore)],
       ["Conf", fmt(row.confidence, 2)],
@@ -690,7 +714,7 @@
       ["Steps/min", fmt(stepsPerMin, 1)],
       ["kcal/min", fmt(kcalPerMin, 2)],
       ["Power", fmtInt(power)],
-    ];
+    );
 
     let gridHtml = "";
     for (const [k, v] of lines) {
