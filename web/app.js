@@ -392,11 +392,131 @@
     pill("AvgConf", summary.avgConfidence, "");
   }
 
+  function formatBaselineValue(key, value) {
+    if (value === null || value === undefined) return "-";
+    if (typeof value === "boolean") return value ? "true" : "false";
+    if (typeof value === "number") {
+      if (!Number.isFinite(value)) return "-";
+      const k = String(key || "");
+      let digits = 2;
+      if (k.endsWith("Bpm") || k.endsWith("Brpm") || k.endsWith("W")) digits = 0;
+      else if (k.includes("Pct")) digits = 1;
+      else if (k.endsWith("C") || k.toLowerCase().includes("temp")) digits = 2;
+      else if (k.toLowerCase().includes("scale")) digits = 2;
+      else if (Math.abs(value - Math.round(value)) < 1e-6) digits = 0;
+      return digits === 0 ? String(Math.round(value)) : value.toFixed(digits);
+    }
+    return String(value);
+  }
+
+  function renderBaselinesTable(baselines) {
+    const tbody = document.querySelector("#baselinesTable tbody");
+    if (!tbody) return;
+    tbody.textContent = "";
+
+    if (!baselines || typeof baselines !== "object") {
+      const tr = document.createElement("tr");
+      const td = document.createElement("td");
+      td.colSpan = 2;
+      td.textContent = "-";
+      tr.appendChild(td);
+      tbody.appendChild(tr);
+      return;
+    }
+
+    const order = [
+      "rhrBpm",
+      "rhrScaleBpm",
+      "hrvSdnnMs",
+      "hrvScaleMs",
+      "spo2Pct",
+      "spo2ScalePct",
+      "respRateBrpm",
+      "respRateScaleBrpm",
+      "wristTempC",
+      "wristTempScaleC",
+      "ftpW",
+      "hrMaxBpm",
+    ];
+
+    const keys = Object.keys(baselines);
+    const seen = new Set(order);
+    const rest = keys.filter((k) => !seen.has(k)).sort((a, b) => a.localeCompare(b));
+    const list = order.filter((k) => keys.includes(k)).concat(rest);
+
+    for (const k of list) {
+      const tr = document.createElement("tr");
+      const tdK = document.createElement("td");
+      tdK.className = "k";
+      tdK.textContent = k;
+      const tdV = document.createElement("td");
+      tdV.className = "v";
+      tdV.textContent = formatBaselineValue(k, baselines[k]);
+      tr.appendChild(tdK);
+      tr.appendChild(tdV);
+      tbody.appendChild(tr);
+    }
+  }
+
+  function renderBehaviorBaseline(behaviorBaseline) {
+    const hint = $("behaviorBaselineHint");
+    const out = $("behaviorBaselineJson");
+    if (hint) hint.textContent = "";
+    if (out) out.value = "";
+    if (!behaviorBaseline) {
+      if (hint) hint.textContent = "未启用或数据不足。";
+      return;
+    }
+
+    const ready = Boolean(behaviorBaseline.ready);
+    const applyFromMs = behaviorBaseline.windowEndTsMs ?? null;
+    const applyFrom =
+      Number.isFinite(applyFromMs) ? new Date(applyFromMs).toLocaleString() : "-";
+    if (hint) hint.textContent = `ready=${ready} · applyFrom=${applyFrom}`;
+    if (out) out.value = JSON.stringify(behaviorBaseline, null, 2);
+  }
+
+  async function copyTextToClipboard(text) {
+    const s = String(text ?? "");
+    try {
+      if (navigator.clipboard && window.isSecureContext) {
+        await navigator.clipboard.writeText(s);
+        return true;
+      }
+    } catch (err) {
+      // ignore -> fallback
+    }
+
+    try {
+      const ta = document.createElement("textarea");
+      ta.value = s;
+      ta.setAttribute("readonly", "true");
+      ta.style.position = "fixed";
+      ta.style.left = "-9999px";
+      ta.style.top = "0";
+      document.body.appendChild(ta);
+      ta.focus();
+      ta.select();
+      const ok = document.execCommand("copy");
+      ta.remove();
+      return ok;
+    } catch (err) {
+      return false;
+    }
+  }
+
   function drawChart(series) {
     const canvas = $("chart");
     const ctx = canvas.getContext("2d");
-    const w = canvas.width;
-    const h = canvas.height;
+    const dpr = Math.max(1, window.devicePixelRatio || 1);
+    const rect = canvas.getBoundingClientRect();
+    const w = Math.max(1, rect.width);
+    const h = Math.max(1, rect.height);
+    const pxW = Math.max(1, Math.round(w * dpr));
+    const pxH = Math.max(1, Math.round(h * dpr));
+    if (canvas.width !== pxW) canvas.width = pxW;
+    if (canvas.height !== pxH) canvas.height = pxH;
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
 
     ctx.clearRect(0, 0, w, h);
 
@@ -511,6 +631,8 @@
 
   function renderResult(result) {
     renderSummaryPills(result.summary);
+    renderBaselinesTable(result.baselines);
+    renderBehaviorBaseline(result.behaviorBaseline);
     drawChart(result.series);
     renderResultTable(result.series);
     $("jsonOutput").value = JSON.stringify(result, null, 2);
@@ -1154,6 +1276,25 @@
 
     $("appleImportAndRun").addEventListener("click", () => {
       importAppleHealthToJson(true);
+    });
+
+    $("copyBaselinesJson")?.addEventListener("click", async () => {
+      const btn = $("copyBaselinesJson");
+      const baselines = state.lastResult?.baselines ?? null;
+      const text = baselines ? JSON.stringify(baselines, null, 2) : "";
+      const ok = await copyTextToClipboard(text);
+      if (btn) {
+        const prev = btn.textContent;
+        btn.textContent = ok ? "已复制" : "复制失败";
+        window.setTimeout(() => {
+          btn.textContent = prev;
+        }, 900);
+      }
+    });
+
+    window.addEventListener("resize", () => {
+      if (!state.lastResult) return;
+      drawChart(state.lastResult.series);
     });
 
     // Init: default time + a couple segments

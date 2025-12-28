@@ -32,7 +32,7 @@
 
       header {
         padding: 22px 18px 12px;
-        max-width: 1200px;
+        max-width: 100%;
         margin: 0 auto;
       }
 
@@ -51,7 +51,7 @@
       }
 
       .wrap {
-        max-width: 1200px;
+        max-width: 100%;
         margin: 0 auto;
         padding: 12px 18px 32px;
         display: grid;
@@ -220,8 +220,19 @@
         z-index: 1;
       }
 
+      .kv-table td.k {
+        font-family: var(--mono);
+        color: #cfe0ff;
+        width: 38%;
+      }
+
+      .kv-table td.v {
+        font-family: var(--mono);
+        width: 62%;
+      }
+
       .scroll {
-        max-height: 360px;
+        max-height: min(60vh, 620px);
         overflow: auto;
         border: 1px solid var(--border);
         border-radius: 12px;
@@ -245,7 +256,7 @@
 
       #chart {
         width: 100%;
-        height: 260px;
+        height: 340px;
         border: 1px solid var(--border);
         border-radius: 12px;
         background: rgba(10, 16, 30, 0.35);
@@ -542,7 +553,29 @@
 
         <div class="row">
           <div id="summaryBar" style="display: flex; flex-wrap: wrap; gap: 8px"></div>
-          <canvas id="chart" width="980" height="260"></canvas>
+          <details open>
+            <summary>计算基线（模型使用）</summary>
+            <div class="scroll" style="margin-top: 10px; max-height: 220px">
+              <table id="baselinesTable" class="kv-table">
+                <thead>
+                  <tr>
+                    <th>Key</th>
+                    <th>Value</th>
+                  </tr>
+                </thead>
+                <tbody></tbody>
+              </table>
+            </div>
+            <div class="actions" style="margin-top: 10px">
+              <button id="copyBaselinesJson">复制 baselines JSON</button>
+            </div>
+          </details>
+          <details>
+            <summary>行为基线（behaviorBaseline）</summary>
+            <div class="hint" id="behaviorBaselineHint" style="margin-top: 8px"></div>
+            <textarea id="behaviorBaselineJson" spellcheck="false" readonly></textarea>
+          </details>
+          <canvas id="chart" width="980" height="340"></canvas>
           <details>
             <summary>结果表（前 250 行）</summary>
             <div class="scroll" style="margin-top: 10px">
