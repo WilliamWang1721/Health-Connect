@@ -220,6 +220,9 @@
       imputeSpo2QualityAtFresh: 0.4,
       imputeRrQualityAtFresh: 0.4,
       imputeTempQualityAtFresh: 0.4,
+      // Sleep charging: lower duration weight; increase quality weight.
+      sleepChargeDurationWeight: 0.8,
+      sleepRecoveryExponent: 1.6,
       baseSleepChargePerHour: 10.5,
       baseRestChargePerHour: 2,
       baseMindChargePerHour: 4,
@@ -1021,7 +1024,7 @@
     if (isSleep && tempOnsetBenefitIndex > 0) {
       sleepRecovery *= 1 + onsetBoost * tempOnsetBenefitIndex;
     }
-    const sleepQualityExp = 1.3;
+    const sleepQualityExp = clamp(toNumberOrNull(params.sleepRecoveryExponent) ?? 1.3, 0.5, 3);
     sleepRecovery = clamp(sleepRecovery, 0, 2.5);
     if (isSleep && sleepRecovery > 0) sleepRecovery = clamp(Math.pow(sleepRecovery, sleepQualityExp), 0, 2.5);
 
@@ -1171,8 +1174,9 @@
     const chargeGate = gateWeights(baseWeights.charge, indices.componentQuality.charge, params.minChargeScale);
     const drainGate = gateWeights(baseWeights.drain, indices.componentQuality.drain, params.minDrainScale);
 
+    const sleepDurationWeight = clamp(toNumberOrNull(params.sleepChargeDurationWeight) ?? 1, 0, 1.5);
     const rawChargePerHour =
-      chargeGate.weights.sleep * params.baseSleepChargePerHour * indices.recovery.sleepRecovery +
+      sleepDurationWeight * chargeGate.weights.sleep * params.baseSleepChargePerHour * indices.recovery.sleepRecovery +
       chargeGate.weights.rest * params.baseRestChargePerHour * indices.recovery.restRecovery +
       chargeGate.weights.mind * params.baseMindChargePerHour * indices.recovery.mindRecovery;
 

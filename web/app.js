@@ -7,6 +7,21 @@
   const state = {
     segments: [],
     lastResult: null,
+    chart: {
+      options: {
+        showReserve: true,
+        showComfort: true,
+        showFatigue: false,
+        showSleep: true,
+        showEvents: true,
+        bottomMetric: "chargeDrain",
+      },
+      view: { minX: null, maxX: null },
+      hover: { idx: null, px: null },
+      drag: { active: false, startPx: null, endPx: null },
+      cache: null,
+      raf: 0,
+    },
   };
 
   function clamp(value, min, max) {
@@ -343,6 +358,8 @@
     };
 
     setIf("baseSleepChargePerHour", "baseSleepChargePerHour");
+    setIf("sleepChargeDurationWeight", "sleepChargeDurationWeight");
+    setIf("sleepRecoveryExponent", "sleepRecoveryExponent");
     setIf("baseRestChargePerHour", "baseRestChargePerHour");
     setIf("baseMindChargePerHour", "baseMindChargePerHour");
     setIf("loadDrainWorkoutMaxPerHour", "loadDrainWorkoutMaxPerHour");
@@ -526,8 +543,191 @@
     }
   }
 
+  function lowerBound(arr, x) {
+    let lo = 0;
+    let hi = arr.length;
+    while (lo < hi) {
+      const mid = (lo + hi) >> 1;
+      if (arr[mid] < x) lo = mid + 1;
+      else hi = mid;
+    }
+    return lo;
+  }
+
+  function upperBound(arr, x) {
+    let lo = 0;
+    let hi = arr.length;
+    while (lo < hi) {
+      const mid = (lo + hi) >> 1;
+      if (arr[mid] <= x) lo = mid + 1;
+      else hi = mid;
+    }
+    return lo;
+  }
+
+  function scheduleChartRedraw() {
+    if (state.chart.raf) return;
+    state.chart.raf = window.requestAnimationFrame(() => {
+      state.chart.raf = 0;
+      if (!state.lastResult) return;
+      drawChart(state.lastResult.series);
+    });
+  }
+
+  function readChartOptionsFromUI() {
+    const opts = state.chart.options;
+    const reserve = $("chartShowReserve");
+    const comfort = $("chartShowComfort");
+    const fatigue = $("chartShowFatigue");
+    const sleep = $("chartShowSleep");
+    const events = $("chartShowEvents");
+    const bottom = $("chartBottomMetric");
+
+    if (reserve) opts.showReserve = Boolean(reserve.checked);
+    if (comfort) opts.showComfort = Boolean(comfort.checked);
+    if (fatigue) opts.showFatigue = Boolean(fatigue.checked);
+    if (sleep) opts.showSleep = Boolean(sleep.checked);
+    if (events) opts.showEvents = Boolean(events.checked);
+    if (bottom && bottom.value) opts.bottomMetric = String(bottom.value);
+
+    if (!opts.showReserve && !opts.showComfort && !opts.showFatigue) {
+      opts.showReserve = true;
+      if (reserve) reserve.checked = true;
+    }
+  }
+
+  function resetChartZoom() {
+    state.chart.view.minX = null;
+    state.chart.view.maxX = null;
+    state.chart.drag.active = false;
+    state.chart.drag.startPx = null;
+    state.chart.drag.endPx = null;
+  }
+
+  function isLikelyEpochMs(x) {
+    return Number.isFinite(x) && x > 1e11;
+  }
+
+  function formatTimeTick(ms, rangeMs) {
+    const d = new Date(ms);
+    const pad2 = (n) => String(n).padStart(2, "0");
+    const hh = pad2(d.getHours());
+    const mi = pad2(d.getMinutes());
+    if (rangeMs <= 24 * 3600 * 1000) return `${hh}:${mi}`;
+    const mm = pad2(d.getMonth() + 1);
+    const dd = pad2(d.getDate());
+    return `${mm}-${dd} ${hh}:${mi}`;
+  }
+
+  function computeTimeTicks(minMs, maxMs, target = 6) {
+    const rangeMs = Math.max(0, maxMs - minMs);
+    if (!Number.isFinite(rangeMs) || rangeMs <= 0) return [];
+    const steps = [
+      5 * 60000,
+      10 * 60000,
+      15 * 60000,
+      30 * 60000,
+      60 * 60000,
+      2 * 60 * 60000,
+      3 * 60 * 60000,
+      6 * 60 * 60000,
+      12 * 60 * 60000,
+      24 * 60 * 60000,
+    ];
+    let step = steps[steps.length - 1];
+    for (const s of steps) {
+      if (rangeMs / s <= target) {
+        step = s;
+        break;
+      }
+    }
+    const out = [];
+    const start = Math.ceil(minMs / step) * step;
+    for (let t = start; t <= maxMs + 1; t += step) out.push(t);
+    return out;
+  }
+
+  function clampToCanvasTooltip(wrapEl, tipEl, x, y) {
+    const pad = 8;
+    const maxLeft = Math.max(pad, wrapEl.clientWidth - tipEl.offsetWidth - pad);
+    const maxTop = Math.max(pad, wrapEl.clientHeight - tipEl.offsetHeight - pad);
+    return {
+      left: clamp(x, pad, maxLeft),
+      top: clamp(y, pad, maxTop),
+    };
+  }
+
+  function buildChartTooltipHtml(row) {
+    if (!row) return "";
+
+    const timeLabel = row.tsMs ? new Date(row.tsMs).toLocaleString() : `#${row.i}`;
+    const kind = row.context?.kind ?? "-";
+    const stage = kind === "SLEEP" ? row.context?.sleepStage ?? "" : "";
+    const meta = kind === "SLEEP" && stage ? `${kind} · ${stage}` : kind;
+
+    const fmt = (v, digits = 1) => (Number.isFinite(v) ? Number(v).toFixed(digits) : "-");
+    const fmtInt = (v) => (Number.isFinite(v) ? String(Math.round(Number(v))) : "-");
+
+    const hr = row.input?.hr;
+    const hrv = row.input?.hrv;
+    const power = row.input?.power;
+    const dtMin = Number(row.dtMinutes ?? 0) || 0;
+    const stepsPerMin = dtMin > 0 ? Number(row.input?.steps ?? 0) / dtMin : null;
+    const kcalPerMin = dtMin > 0 ? Number(row.input?.activeEnergy ?? 0) / dtMin : null;
+
+    const netPerHour = Number(row.chargePerHour ?? 0) - Number(row.drainPerHour ?? 0);
+
+    const lines = [
+      ["Reserve", fmt(row.bbNext, 1)],
+      ["Comfort", fmtInt(row.comfortScore)],
+      ["Fatigue", fmtInt(row.fatigueScore)],
+      ["Conf", fmt(row.confidence, 2)],
+      ["Net/h", fmt(netPerHour, 1)],
+      ["Charge/h", fmt(row.chargePerHour, 1)],
+      ["Drain/h", fmt(row.drainPerHour, 1)],
+      ["HR", fmtInt(hr)],
+      ["HRV", fmtInt(hrv)],
+      ["Steps/min", fmt(stepsPerMin, 1)],
+      ["kcal/min", fmt(kcalPerMin, 2)],
+      ["Power", fmtInt(power)],
+    ];
+
+    let gridHtml = "";
+    for (const [k, v] of lines) {
+      if (v === "-" || v === "NaN") continue;
+      gridHtml += `<div class="tt-k">${k}</div><div class="tt-v">${v}</div>`;
+    }
+
+    return `
+      <div class="tt-title">${timeLabel}</div>
+      <div class="tt-meta">${meta}</div>
+      <div class="tt-grid">${gridHtml}</div>
+    `;
+  }
+
+  function drawLine(ctx, xs, series, i0, i1, xOf, yOf, getY) {
+    let started = false;
+    for (let i = i0; i <= i1; i++) {
+      const r = series[i];
+      const v = getY(r);
+      if (!Number.isFinite(v)) {
+        started = false;
+        continue;
+      }
+      const x = xOf(xs[i]);
+      const y = yOf(v);
+      if (!started) {
+        ctx.moveTo(x, y);
+        started = true;
+      } else {
+        ctx.lineTo(x, y);
+      }
+    }
+  }
+
   function drawChart(series) {
     const canvas = $("chart");
+    if (!canvas) return;
     const ctx = canvas.getContext("2d");
     const dpr = Math.max(1, window.devicePixelRatio || 1);
     const rect = canvas.getBoundingClientRect();
@@ -541,75 +741,485 @@
 
     ctx.clearRect(0, 0, w, h);
 
-    const pad = 28;
-    const plotW = w - pad * 2;
-    const plotH = h - pad * 2;
+    const tip = $("chartTooltip");
+    const wrap = $("chartWrap");
+    if (tip) tip.hidden = true;
 
-    const xs = series.map((r, idx) => (r.tsMs !== null && r.tsMs !== undefined ? r.tsMs : idx));
-    const minX = Math.min(...xs);
-    const maxX = Math.max(...xs);
-    const xScale = maxX === minX ? 1 : plotW / (maxX - minX);
+    if (!Array.isArray(series) || series.length === 0) {
+      state.chart.cache = null;
+      ctx.save();
+      ctx.fillStyle = "rgba(157, 176, 218, 0.95)";
+      ctx.font = "12px ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace";
+      ctx.fillText("No data", 12, 20);
+      ctx.restore();
+      return;
+    }
 
-    const xOf = (x) => pad + (x - minX) * xScale;
-    const yOf = (bb) => pad + (100 - clamp(bb, 0, 100)) * (plotH / 100);
+    const opts = state.chart.options;
+    const xs = series.map((r, idx) => (Number.isFinite(r.tsMs) ? r.tsMs : idx));
+    const minXAll = xs[0];
+    const maxXAll = xs[xs.length - 1];
+    const isTime = isLikelyEpochMs(minXAll) && isLikelyEpochMs(maxXAll);
 
-    // Background grid
+    const minX = Math.min(minXAll, ...xs);
+    const maxX = Math.max(maxXAll, ...xs);
+
+    let viewMinX = state.chart.view.minX === null ? minX : Number(state.chart.view.minX);
+    let viewMaxX = state.chart.view.maxX === null ? maxX : Number(state.chart.view.maxX);
+    if (!Number.isFinite(viewMinX) || !Number.isFinite(viewMaxX) || viewMaxX <= viewMinX) {
+      viewMinX = minX;
+      viewMaxX = maxX;
+    }
+    viewMinX = clamp(viewMinX, minX, maxX);
+    viewMaxX = clamp(viewMaxX, minX, maxX);
+
+    const padL = 44;
+    const padR = 18;
+    const padT = 14;
+    const padB = 26;
+    const plotW = Math.max(1, w - padL - padR);
+    const plotH = Math.max(1, h - padT - padB);
+
+    const gap = 12;
+    const bottomMetric = String(opts.bottomMetric || "chargeDrain");
+    let bottomH = Math.max(84, Math.round(plotH * 0.32));
+    let topH = Math.max(120, plotH - bottomH - gap);
+    if (topH + bottomH + gap > plotH) bottomH = Math.max(60, plotH - topH - gap);
+    if (plotH < 210) {
+      bottomH = Math.max(64, Math.round(plotH * 0.36));
+      topH = Math.max(110, plotH - bottomH - gap);
+    }
+
+    const topPanel = { x: padL, y: padT, w: plotW, h: topH };
+    const bottomPanel = { x: padL, y: padT + topH + gap, w: plotW, h: bottomH };
+    const plotY0 = padT;
+    const plotY1 = padT + plotH;
+
+    const xScale = viewMaxX === viewMinX ? 1 : plotW / (viewMaxX - viewMinX);
+    const xOf = (x) => padL + (x - viewMinX) * xScale;
+    const xToValue = (px) => viewMinX + (px - padL) / Math.max(1e-9, xScale);
+
+    const i0 = clamp(lowerBound(xs, viewMinX), 0, xs.length - 1);
+    const i1 = clamp(upperBound(xs, viewMaxX) - 1, 0, xs.length - 1);
+
+    state.chart.cache = {
+      xs,
+      minX,
+      maxX,
+      viewMinX,
+      viewMaxX,
+      padL,
+      padR,
+      padT,
+      padB,
+      plotW,
+      plotH,
+      plotY0,
+      plotY1,
+      topPanel,
+      bottomPanel,
+      xScale,
+      i0,
+      i1,
+      isTime,
+    };
+
+    const yScore = (v) => topPanel.y + (100 - clamp(v, 0, 100)) * (topPanel.h / 100);
+
+    // Top grid
     ctx.save();
     ctx.strokeStyle = "rgba(36, 50, 82, 0.55)";
     ctx.lineWidth = 1;
     for (let y = 0; y <= 100; y += 20) {
+      const yy = yScore(y);
       ctx.beginPath();
-      ctx.moveTo(pad, yOf(y));
-      ctx.lineTo(pad + plotW, yOf(y));
+      ctx.moveTo(topPanel.x, yy);
+      ctx.lineTo(topPanel.x + topPanel.w, yy);
       ctx.stroke();
     }
     ctx.restore();
 
-    // Sleep shading
-    ctx.save();
-    ctx.fillStyle = "rgba(122, 162, 255, 0.10)";
-    let inSleep = false;
-    let sleepStartX = null;
-    for (let i = 0; i < series.length; i++) {
-      const r = series[i];
-      const isSleep = r.context?.kind === "SLEEP";
-      if (isSleep && !inSleep) {
-        inSleep = true;
-        sleepStartX = xOf(xs[i]);
-      }
-      if (!isSleep && inSleep) {
-        inSleep = false;
-        const endX = xOf(xs[i]);
-        ctx.fillRect(sleepStartX, pad, endX - sleepStartX, plotH);
-      }
-    }
-    if (inSleep && sleepStartX !== null) {
-      ctx.fillRect(sleepStartX, pad, pad + plotW - sleepStartX, plotH);
-    }
-    ctx.restore();
+    // Sleep shading (per stage)
+    if (opts.showSleep) {
+      const stageFill = (stage) => {
+        switch (stage) {
+          case "deep":
+            return "rgba(122, 162, 255, 0.16)";
+          case "rem":
+            return "rgba(166, 122, 255, 0.14)";
+          case "inBed":
+            return "rgba(122, 162, 255, 0.08)";
+          case "awake":
+            return "rgba(255, 223, 122, 0.06)";
+          case "core":
+          default:
+            return "rgba(122, 162, 255, 0.11)";
+        }
+      };
 
-    // BB Line
-    ctx.save();
-    ctx.strokeStyle = "rgba(61, 220, 151, 0.95)";
-    ctx.lineWidth = 2;
-    ctx.beginPath();
-    for (let i = 0; i < series.length; i++) {
-      const r = series[i];
-      const x = xOf(xs[i]);
-      const y = yOf(r.bbNext);
-      if (i === 0) ctx.moveTo(x, y);
-      else ctx.lineTo(x, y);
-    }
-    ctx.stroke();
-    ctx.restore();
+      ctx.save();
+      let segStart = null;
+      let segStage = null;
+      const flush = (endIdxOrNull) => {
+        if (segStart === null) return;
+        const x0 = xOf(xs[segStart]);
+        const x1 = endIdxOrNull === null ? topPanel.x + topPanel.w : xOf(xs[endIdxOrNull]);
+        const wRect = Math.max(0, x1 - x0);
+        if (wRect > 0.5) {
+          ctx.fillStyle = stageFill(segStage);
+          ctx.fillRect(x0, topPanel.y, wRect, topPanel.h);
+        }
+        segStart = null;
+        segStage = null;
+      };
 
-    // Axes labels
+      for (let i = i0; i <= i1; i++) {
+        const r = series[i];
+        const isSleep = r.context?.kind === "SLEEP";
+        const stage = isSleep ? String(r.context?.sleepStage ?? "core") : null;
+        if (isSleep) {
+          if (segStart === null) {
+            segStart = i;
+            segStage = stage;
+          } else if (stage !== segStage) {
+            flush(i);
+            segStart = i;
+            segStage = stage;
+          }
+        } else {
+          flush(i);
+        }
+      }
+      flush(null);
+      ctx.restore();
+    }
+
+    // Activity shading (workout/mindful)
+    if (opts.showEvents) {
+      const kindFill = (kind) => {
+        switch (kind) {
+          case "WORKOUT":
+            return "rgba(255, 107, 107, 0.10)";
+          case "HIGH_ACTIVITY":
+            return "rgba(255, 183, 77, 0.07)";
+          case "ACTIVE":
+            return "rgba(61, 220, 151, 0.05)";
+          case "LIGHT_ACTIVITY":
+            return "rgba(61, 220, 151, 0.03)";
+          case "MEDITATION":
+            return "rgba(122, 162, 255, 0.07)";
+          default:
+            return null;
+        }
+      };
+
+      ctx.save();
+      let segStart = null;
+      let segKind = null;
+      const flush = (endIdxOrNull) => {
+        if (segStart === null || !segKind) return;
+        const fill = kindFill(segKind);
+        if (!fill) {
+          segStart = null;
+          segKind = null;
+          return;
+        }
+        const x0 = xOf(xs[segStart]);
+        const x1 = endIdxOrNull === null ? topPanel.x + topPanel.w : xOf(xs[endIdxOrNull]);
+        const wRect = Math.max(0, x1 - x0);
+        if (wRect > 0.5) {
+          ctx.fillStyle = fill;
+          ctx.fillRect(x0, topPanel.y, wRect, topPanel.h);
+        }
+        segStart = null;
+        segKind = null;
+      };
+
+      for (let i = i0; i <= i1; i++) {
+        const kind = series[i].context?.kind ?? null;
+        const fill = kindFill(kind);
+        if (fill) {
+          if (segStart === null) {
+            segStart = i;
+            segKind = kind;
+          } else if (kind !== segKind) {
+            flush(i);
+            segStart = i;
+            segKind = kind;
+          }
+        } else {
+          flush(i);
+        }
+      }
+      flush(null);
+      ctx.restore();
+    }
+
+    // Reserve fill
+    if (opts.showReserve) {
+      ctx.save();
+      ctx.beginPath();
+      drawLine(ctx, xs, series, i0, i1, xOf, yScore, (r) => r.bbNext);
+      const firstX = xOf(xs[i0]);
+      const lastX = xOf(xs[i1]);
+      ctx.lineTo(lastX, topPanel.y + topPanel.h);
+      ctx.lineTo(firstX, topPanel.y + topPanel.h);
+      ctx.closePath();
+      const grad = ctx.createLinearGradient(0, topPanel.y, 0, topPanel.y + topPanel.h);
+      grad.addColorStop(0, "rgba(61, 220, 151, 0.22)");
+      grad.addColorStop(1, "rgba(61, 220, 151, 0.02)");
+      ctx.fillStyle = grad;
+      ctx.fill();
+      ctx.restore();
+    }
+
+    // Top lines
+    const drawTopSeries = (enabled, color, width, getY, dash = null) => {
+      if (!enabled) return;
+      ctx.save();
+      ctx.strokeStyle = color;
+      ctx.lineWidth = width;
+      if (dash) ctx.setLineDash(dash);
+      ctx.beginPath();
+      drawLine(ctx, xs, series, i0, i1, xOf, yScore, getY);
+      ctx.stroke();
+      ctx.restore();
+    };
+
+    drawTopSeries(opts.showReserve, "rgba(61, 220, 151, 0.95)", 2.2, (r) => r.bbNext);
+    drawTopSeries(opts.showComfort, "rgba(122, 162, 255, 0.95)", 1.8, (r) => r.comfortScore);
+    drawTopSeries(opts.showFatigue, "rgba(255, 183, 77, 0.95)", 1.6, (r) => r.fatigueScore, [6, 4]);
+
+    // Top axis labels
     ctx.save();
     ctx.fillStyle = "rgba(157, 176, 218, 0.95)";
     ctx.font = "12px ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace";
-    ctx.fillText("100", 6, yOf(100) + 4);
-    ctx.fillText("0", 12, yOf(0) + 4);
+    ctx.fillText("100", 8, yScore(100) + 4);
+    ctx.fillText("50", 14, yScore(50) + 4);
+    ctx.fillText("0", 18, yScore(0) + 4);
     ctx.restore();
+
+    // Bottom panel
+    const bottomMinMax = () => {
+      let minV = Infinity;
+      let maxV = -Infinity;
+      const upd = (v) => {
+        if (!Number.isFinite(v)) return;
+        minV = Math.min(minV, v);
+        maxV = Math.max(maxV, v);
+      };
+      for (let i = i0; i <= i1; i++) upd(getBottomValue(series[i], bottomMetric));
+      if (minV === Infinity || maxV === -Infinity) return null;
+      return { minV, maxV };
+    };
+
+    function getBottomValue(r, metric) {
+      switch (metric) {
+        case "confidence":
+          return r.confidence;
+        case "hr":
+          return r.input?.hr ?? null;
+        case "steps": {
+          const dtMin = Number(r.dtMinutes ?? 0) || 0;
+          return dtMin > 0 ? Number(r.input?.steps ?? 0) / dtMin : null;
+        }
+        case "power":
+          return r.input?.power ?? null;
+        case "chargeDrain":
+        default:
+          return null;
+      }
+    }
+
+    const drawBottomGridLine = (yy) => {
+      ctx.beginPath();
+      ctx.moveTo(bottomPanel.x, yy);
+      ctx.lineTo(bottomPanel.x + bottomPanel.w, yy);
+      ctx.stroke();
+    };
+
+    if (bottomMetric === "chargeDrain") {
+      let maxAbs = 0;
+      for (let i = i0; i <= i1; i++) {
+        maxAbs = Math.max(maxAbs, Number(series[i].chargePerHour ?? 0) || 0, Number(series[i].drainPerHour ?? 0) || 0);
+      }
+      maxAbs = Math.max(1, maxAbs);
+      const yRate = (v) =>
+        bottomPanel.y + (maxAbs - clamp(v, -maxAbs, maxAbs)) * (bottomPanel.h / (2 * maxAbs));
+      const yZero = yRate(0);
+
+      ctx.save();
+      ctx.strokeStyle = "rgba(36, 50, 82, 0.55)";
+      ctx.lineWidth = 1;
+      drawBottomGridLine(yRate(maxAbs));
+      drawBottomGridLine(yZero);
+      drawBottomGridLine(yRate(-maxAbs));
+      ctx.restore();
+
+      ctx.save();
+      ctx.fillStyle = "rgba(122, 162, 255, 0.70)";
+      for (let i = i0; i <= i1; i++) {
+        const cph = Number(series[i].chargePerHour ?? 0) || 0;
+        if (cph <= 0) continue;
+        const x0 = xOf(xs[i]);
+        const x1 = i < i1 ? xOf(xs[i + 1]) : bottomPanel.x + bottomPanel.w;
+        const bw = Math.max(1, (x1 - x0) * 0.9);
+        const y = yRate(cph);
+        ctx.fillRect(x0, y, bw, yZero - y);
+      }
+      ctx.fillStyle = "rgba(255, 107, 107, 0.75)";
+      for (let i = i0; i <= i1; i++) {
+        const dph = Number(series[i].drainPerHour ?? 0) || 0;
+        if (dph <= 0) continue;
+        const x0 = xOf(xs[i]);
+        const x1 = i < i1 ? xOf(xs[i + 1]) : bottomPanel.x + bottomPanel.w;
+        const bw = Math.max(1, (x1 - x0) * 0.9);
+        const y = yRate(-dph);
+        ctx.fillRect(x0, yZero, bw, y - yZero);
+      }
+      ctx.restore();
+
+      ctx.save();
+      ctx.fillStyle = "rgba(157, 176, 218, 0.95)";
+      ctx.font = "12px ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace";
+      ctx.fillText(`+${Math.round(maxAbs)}`, 6, yRate(maxAbs) + 4);
+      ctx.fillText("0", 14, yZero + 4);
+      ctx.fillText(`-${Math.round(maxAbs)}`, 6, yRate(-maxAbs) + 4);
+      ctx.fillText("Charge/Drain per hour", bottomPanel.x + 6, bottomPanel.y + 14);
+      ctx.restore();
+    } else {
+      const mm = bottomMinMax();
+      const minV = mm ? mm.minV : 0;
+      const maxV = mm ? mm.maxV : 1;
+      const span = Math.max(1e-9, maxV - minV);
+      const pad = span * 0.08;
+      const v0 = bottomMetric === "confidence" ? 0 : minV - pad;
+      const v1 = bottomMetric === "confidence" ? 1 : maxV + pad;
+      const yOf = (v) => bottomPanel.y + (v1 - clamp(v, v0, v1)) * (bottomPanel.h / Math.max(1e-9, v1 - v0));
+
+      ctx.save();
+      ctx.strokeStyle = "rgba(36, 50, 82, 0.55)";
+      ctx.lineWidth = 1;
+      drawBottomGridLine(yOf(v0));
+      drawBottomGridLine(yOf((v0 + v1) / 2));
+      drawBottomGridLine(yOf(v1));
+      ctx.restore();
+
+      ctx.save();
+      ctx.strokeStyle = "rgba(207, 224, 255, 0.85)";
+      ctx.lineWidth = 1.6;
+      if (bottomMetric === "confidence") ctx.setLineDash([5, 4]);
+      ctx.beginPath();
+      drawLine(ctx, xs, series, i0, i1, xOf, yOf, (r) => getBottomValue(r, bottomMetric));
+      ctx.stroke();
+      ctx.restore();
+
+      const label =
+        bottomMetric === "confidence"
+          ? "Confidence"
+          : bottomMetric === "hr"
+            ? "Heart rate (bpm)"
+            : bottomMetric === "steps"
+              ? "Steps/min"
+              : bottomMetric === "power"
+                ? "Power (W)"
+                : "Metric";
+
+      ctx.save();
+      ctx.fillStyle = "rgba(157, 176, 218, 0.95)";
+      ctx.font = "12px ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace";
+      ctx.fillText(label, bottomPanel.x + 6, bottomPanel.y + 14);
+      ctx.fillText(Number(v1).toFixed(bottomMetric === "confidence" ? 1 : 0), 6, yOf(v1) + 4);
+      ctx.fillText(Number((v0 + v1) / 2).toFixed(bottomMetric === "confidence" ? 1 : 0), 6, yOf((v0 + v1) / 2) + 4);
+      ctx.fillText(Number(v0).toFixed(bottomMetric === "confidence" ? 1 : 0), 6, yOf(v0) + 4);
+      ctx.restore();
+    }
+
+    // X axis ticks
+    if (isTime) {
+      const ticks = computeTimeTicks(viewMinX, viewMaxX, 7);
+      const rangeMs = viewMaxX - viewMinX;
+      ctx.save();
+      ctx.strokeStyle = "rgba(36, 50, 82, 0.75)";
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      ctx.moveTo(padL, plotY1);
+      ctx.lineTo(padL + plotW, plotY1);
+      ctx.stroke();
+      ctx.fillStyle = "rgba(157, 176, 218, 0.95)";
+      ctx.font = "12px ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace";
+      for (const t of ticks) {
+        const x = xOf(t);
+        if (x < padL - 2 || x > padL + plotW + 2) continue;
+        ctx.beginPath();
+        ctx.moveTo(x, plotY1);
+        ctx.lineTo(x, plotY1 + 6);
+        ctx.stroke();
+        const label = formatTimeTick(t, rangeMs);
+        const tw = ctx.measureText(label).width;
+        ctx.fillText(label, x - tw / 2, plotY1 + 18);
+      }
+      ctx.restore();
+    }
+
+    // Hover crosshair + tooltip
+    const hoverIdx = state.chart.hover.idx;
+    const hoverPx = state.chart.hover.px;
+    if (hoverIdx !== null && hoverIdx !== undefined && hoverIdx >= i0 && hoverIdx <= i1) {
+      const x = xOf(xs[hoverIdx]);
+      ctx.save();
+      ctx.strokeStyle = "rgba(207, 224, 255, 0.35)";
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      ctx.moveTo(x, plotY0);
+      ctx.lineTo(x, plotY1);
+      ctx.stroke();
+      ctx.restore();
+
+      const dot = (y, color) => {
+        if (!Number.isFinite(y)) return;
+        ctx.save();
+        ctx.fillStyle = color;
+        ctx.beginPath();
+        ctx.arc(x, y, 3, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.restore();
+      };
+
+      if (opts.showReserve) dot(yScore(series[hoverIdx].bbNext), "rgba(61, 220, 151, 0.95)");
+      if (opts.showComfort) dot(yScore(series[hoverIdx].comfortScore), "rgba(122, 162, 255, 0.95)");
+      if (opts.showFatigue) dot(yScore(series[hoverIdx].fatigueScore), "rgba(255, 183, 77, 0.95)");
+
+      if (tip && wrap && hoverPx) {
+        tip.innerHTML = buildChartTooltipHtml(series[hoverIdx]);
+        tip.hidden = false;
+        const pos = clampToCanvasTooltip(wrap, tip, hoverPx.x + 12, hoverPx.y + 12);
+        tip.style.left = `${pos.left}px`;
+        tip.style.top = `${pos.top}px`;
+      }
+    }
+
+    // Drag selection overlay (zoom)
+    if (state.chart.drag.active && Number.isFinite(state.chart.drag.startPx) && Number.isFinite(state.chart.drag.endPx)) {
+      const x0 = clamp(Math.min(state.chart.drag.startPx, state.chart.drag.endPx), padL, padL + plotW);
+      const x1 = clamp(Math.max(state.chart.drag.startPx, state.chart.drag.endPx), padL, padL + plotW);
+      ctx.save();
+      ctx.fillStyle = "rgba(122, 162, 255, 0.12)";
+      ctx.strokeStyle = "rgba(122, 162, 255, 0.45)";
+      ctx.lineWidth = 1;
+      ctx.fillRect(x0, plotY0, Math.max(0, x1 - x0), plotH);
+      ctx.strokeRect(x0 + 0.5, plotY0 + 0.5, Math.max(0, x1 - x0) - 1, plotH - 1);
+      ctx.restore();
+    }
+
+    // Keep tooltip hidden when not hovering
+    if ((hoverIdx === null || hoverIdx === undefined) && tip) tip.hidden = true;
+
+    // Hide tooltip when hovering but no px (shouldn't happen)
+    if (hoverIdx !== null && hoverIdx !== undefined && !hoverPx && tip) tip.hidden = true;
+
+    // Persist hover mapping helpers for event handlers (only numbers)
+    state.chart.cache.xToValue = xToValue;
   }
 
   function renderResultTable(series) {
@@ -1650,6 +2260,132 @@
         }, 900);
       }
     });
+
+    // Chart controls + interactions (Garmin-like hover/zoom)
+    readChartOptionsFromUI();
+
+    const onChartOptChange = () => {
+      readChartOptionsFromUI();
+      if (!state.lastResult) return;
+      drawChart(state.lastResult.series);
+    };
+
+    $("chartShowReserve")?.addEventListener("change", onChartOptChange);
+    $("chartShowComfort")?.addEventListener("change", onChartOptChange);
+    $("chartShowFatigue")?.addEventListener("change", onChartOptChange);
+    $("chartShowSleep")?.addEventListener("change", onChartOptChange);
+    $("chartShowEvents")?.addEventListener("change", onChartOptChange);
+    $("chartBottomMetric")?.addEventListener("change", onChartOptChange);
+
+    $("chartResetZoom")?.addEventListener("click", () => {
+      resetChartZoom();
+      if (!state.lastResult) return;
+      drawChart(state.lastResult.series);
+    });
+
+    const canvas = $("chart");
+    if (canvas) {
+      canvas.style.touchAction = "none";
+
+      const clearHover = () => {
+        state.chart.hover.idx = null;
+        state.chart.hover.px = null;
+        const tip = $("chartTooltip");
+        if (tip) tip.hidden = true;
+      };
+
+      const updateHoverFromEvent = (e) => {
+        const c = state.chart.cache;
+        if (!c || !Array.isArray(c.xs) || c.xs.length === 0) return;
+        const pxX = clamp(e.offsetX, c.padL, c.padL + c.plotW);
+        const pxY = clamp(e.offsetY, 0, c.plotY1);
+        const xVal = c.viewMinX + (pxX - c.padL) / Math.max(1e-9, c.xScale);
+        let idx = lowerBound(c.xs, xVal);
+        idx = clamp(idx, c.i0, c.i1);
+        if (idx > c.i0) {
+          const left = c.xs[idx - 1];
+          const right = c.xs[idx];
+          if (Math.abs(left - xVal) <= Math.abs(right - xVal)) idx = idx - 1;
+        }
+        state.chart.hover.idx = idx;
+        state.chart.hover.px = { x: e.offsetX, y: pxY };
+      };
+
+      canvas.addEventListener("pointerleave", () => {
+        if (state.chart.drag.active) return;
+        clearHover();
+        scheduleChartRedraw();
+      });
+
+      canvas.addEventListener("pointerdown", (e) => {
+        if (e.button !== 0) return;
+        const c = state.chart.cache;
+        if (!c) return;
+        canvas.setPointerCapture?.(e.pointerId);
+        state.chart.drag.active = true;
+        state.chart.drag.startPx = clamp(e.offsetX, c.padL, c.padL + c.plotW);
+        state.chart.drag.endPx = state.chart.drag.startPx;
+        clearHover();
+        scheduleChartRedraw();
+      });
+
+      canvas.addEventListener("pointermove", (e) => {
+        if (!state.lastResult) return;
+        const c = state.chart.cache;
+        if (!c) return;
+        if (state.chart.drag.active) {
+          state.chart.drag.endPx = clamp(e.offsetX, c.padL, c.padL + c.plotW);
+          scheduleChartRedraw();
+          return;
+        }
+        updateHoverFromEvent(e);
+        scheduleChartRedraw();
+      });
+
+      const endDrag = (e) => {
+        if (!state.chart.drag.active) return;
+        const c = state.chart.cache;
+        const startPx = state.chart.drag.startPx;
+        const endPx = state.chart.drag.endPx;
+        state.chart.drag.active = false;
+        state.chart.drag.startPx = null;
+        state.chart.drag.endPx = null;
+
+        if (!c || !Number.isFinite(startPx) || !Number.isFinite(endPx)) {
+          scheduleChartRedraw();
+          return;
+        }
+
+        if (Math.abs(endPx - startPx) < 8) {
+          updateHoverFromEvent(e);
+          scheduleChartRedraw();
+          return;
+        }
+
+        const px0 = clamp(Math.min(startPx, endPx), c.padL, c.padL + c.plotW);
+        const px1 = clamp(Math.max(startPx, endPx), c.padL, c.padL + c.plotW);
+        const x0 = c.viewMinX + (px0 - c.padL) / Math.max(1e-9, c.xScale);
+        const x1 = c.viewMinX + (px1 - c.padL) / Math.max(1e-9, c.xScale);
+        const dt = c.xs && c.xs.length >= 2 ? c.xs[1] - c.xs[0] : 0;
+        const minSpan = Number.isFinite(dt) && dt > 0 ? dt * 2 : 1;
+        if (x1 - x0 >= minSpan) {
+          state.chart.view.minX = clamp(x0, c.minX, c.maxX);
+          state.chart.view.maxX = clamp(x1, c.minX, c.maxX);
+        }
+
+        clearHover();
+        scheduleChartRedraw();
+      };
+
+      canvas.addEventListener("pointerup", endDrag);
+      canvas.addEventListener("pointercancel", endDrag);
+
+      canvas.addEventListener("dblclick", () => {
+        resetChartZoom();
+        clearHover();
+        scheduleChartRedraw();
+      });
+    }
 
     window.addEventListener("resize", () => {
       if (!state.lastResult) return;
