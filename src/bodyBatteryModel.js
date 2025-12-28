@@ -9,7 +9,7 @@
 })(typeof self !== "undefined" ? self : this, function () {
   "use strict";
 
-  const VERSION = "0.2.0";
+  const VERSION = "0.1.0";
 
   function clamp(value, min, max) {
     if (!Number.isFinite(value)) return min;
@@ -76,30 +76,6 @@
     };
     if (parsed.valence01 === null) return null;
     return parsed;
-  }
-
-  function parseEnergyRating01(epoch) {
-    const raw =
-      epoch?.energyRating ??
-      epoch?.effortRating ??
-      epoch?.workoutEffortRating ??
-      epoch?.workoutEffortScore ??
-      epoch?.energyGrade ??
-      epoch?.energyScore ??
-      epoch?.energyLevel ??
-      epoch?.perceivedExertion ??
-      epoch?.exertion ??
-      epoch?.effort ??
-      epoch?.rpe ??
-      null;
-    if (raw === null || raw === undefined || raw === "") return null;
-
-    if (typeof raw === "object") {
-      const valueRaw = raw.value ?? raw.score ?? raw.rating ?? raw.energy ?? raw.energy01 ?? null;
-      return normalizeScore01(valueRaw);
-    }
-
-    return normalizeScore01(raw);
   }
 
   function asPercentMaybe(value) {
@@ -242,11 +218,6 @@
       baseMindChargePerHour: 4,
       loadDrainWorkoutMaxPerHour: 35,
       loadDrainActiveMaxPerHour: 18,
-      // Workout energy rating (kcal burn / exertion) — scales workout load drain
-      energyRatingAutoStartKcalPerMin: 3,
-      energyRatingAutoFullKcalPerMin: 12,
-      energyRatingWorkoutDrainMultMax: 0.35,
-      energyRatingWorkoutDrainExponent: 1.2,
       stressDrainPerIndexPerHour: 4,
       stressDrainMaxPerHour: 14,
       anomDrainPerIndexPerHour: 2.5,
@@ -371,7 +342,6 @@
     const power = toNumberOrNull(epoch.powerW ?? epoch.power);
     const somRaw = epoch.stateOfMind ?? epoch.som ?? null;
     const somPresent = somRaw !== null && somRaw !== undefined && somRaw !== "";
-    const energyRatingPresent = parseEnergyRating01(epoch) !== null;
 
     const q = {
       hr: scoreQuality01(hr, 30, 220),
@@ -383,7 +353,6 @@
       energy: energy === null ? 0 : energy >= 0 ? 1 : 0.2,
       power: power === null ? 0 : power >= 0 && power <= 2000 ? 1 : 0.2,
       som: somPresent ? 1 : 0,
-      energyRating: energyRatingPresent ? 1 : 0,
     };
 
     if (baselines?.wristTempBaselineDays !== null && baselines?.wristTempBaselineDays !== undefined) {
@@ -499,8 +468,6 @@
     const power = toNumberOrNull(epoch.powerW ?? epoch.power);
     const som = parseStateOfMind(epoch);
     const qSom = clamp(Number(q?.som ?? (som ? 1 : 0)), 0, 1);
-    const energyRating01User = parseEnergyRating01(epoch);
-    const qEnergyRatingUser = clamp(Number(q?.energyRating ?? (energyRating01User !== null ? 1 : 0)), 0, 1);
 
     const rhr = Number(baselines.rhrBpm);
     const hrMax = Number(baselines.hrMaxBpm);
@@ -661,29 +628,7 @@
 
     const loadExponent = context.kind === "WORKOUT" ? 1.55 : 1.25;
     const loadMax = context.kind === "WORKOUT" ? params.loadDrainWorkoutMaxPerHour : params.loadDrainActiveMaxPerHour;
-
-    const energyRatingAutoStart = Math.max(0, toNumberOrNull(params.energyRatingAutoStartKcalPerMin) ?? 3);
-    const energyRatingAutoFull = Math.max(
-      energyRatingAutoStart + 1e-6,
-      toNumberOrNull(params.energyRatingAutoFullKcalPerMin) ?? 12,
-    );
-    const qEnergy = clamp(Number(q.energy ?? 0), 0, 1);
-    const energyRating01Auto =
-      activeEnergy === null ? null : clamp((energyPerMin - energyRatingAutoStart) / (energyRatingAutoFull - energyRatingAutoStart), 0, 1) * qEnergy;
-    const energyRating01 =
-      energyRating01User !== null
-        ? clamp(energyRating01User * qEnergyRatingUser, 0, 1)
-        : energyRating01Auto === null
-          ? null
-          : clamp(energyRating01Auto, 0, 1);
-    const energyRatingSource = energyRating01User !== null ? "user" : energyRating01Auto !== null ? "auto" : null;
-
-    let loadRate = loadMax * Math.pow(intensityForLoad, loadExponent);
-    if (context.kind === "WORKOUT" && energyRating01 !== null) {
-      const multMax = clamp(Number(params.energyRatingWorkoutDrainMultMax ?? 0.35), 0, 3);
-      const exp = clamp(Number(params.energyRatingWorkoutDrainExponent ?? 1.2), 0.5, 4);
-      loadRate *= 1 + multMax * Math.pow(energyRating01, exp);
-    }
+    const loadRate = loadMax * Math.pow(intensityForLoad, loadExponent);
 
     const hrExcessExpected =
       hr === null || !Number.isFinite(rhr)
@@ -739,7 +684,7 @@
       params.anomDrainMaxPerHour,
     );
 
-    const qLoad = clamp(Math.max(q.steps ?? 0, q.energy ?? 0, q.power ?? 0, q.hr ?? 0, q.energyRating ?? 0), 0, 1);
+    const qLoad = clamp(Math.max(q.steps ?? 0, q.energy ?? 0, q.power ?? 0, q.hr ?? 0), 0, 1);
     const qStress = clamp(Math.max(q.hrv ?? 0, q.hr ?? 0), 0, 1);
     const qAnom = clamp(Math.max(q.spo2 ?? 0, q.rr ?? 0, q.temp ?? 0), 0, 1);
     const qSleep = clamp(0.4 + 0.3 * (q.hrv ?? 0) + 0.2 * (q.hr ?? 0) + 0.1 * qAnom, 0, 1);
@@ -775,8 +720,6 @@
       activity: {
         stepsPerMin,
         energyPerMin,
-        energyRating01,
-        energyRatingSource,
         stepsIdx,
         energyIdx,
         powerIdx,
@@ -1186,8 +1129,6 @@
         },
         drainComponents: {
           loadPerHour: indices.drainRates.loadRate,
-          energyRating01: indices.activity.energyRating01,
-          energyRatingSource: indices.activity.energyRatingSource,
           stressPerHour: indicesForStep.drainRates.stressRate,
           anomPerHour: indices.drainRates.anomRate,
           anomIndex: indices.recovery.anomIndex,

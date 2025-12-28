@@ -266,63 +266,6 @@
         background: linear-gradient(90deg, rgba(122, 162, 255, 0.35), rgba(122, 162, 255, 0.9));
         transition: width 0.15s linear;
       }
-
-      code {
-        font-family: var(--mono);
-        font-size: 12px;
-        color: #cfe0ff;
-        border: 1px solid rgba(122, 162, 255, 0.35);
-        background: rgba(122, 162, 255, 0.12);
-        padding: 2px 6px;
-        border-radius: 8px;
-      }
-
-      .modal {
-        position: fixed;
-        inset: 0;
-        display: grid;
-        place-items: center;
-        padding: 18px;
-        z-index: 60;
-      }
-
-      .modal-backdrop {
-        position: absolute;
-        inset: 0;
-        background: rgba(0, 0, 0, 0.65);
-        backdrop-filter: blur(2px);
-      }
-
-      .modal-panel {
-        position: relative;
-        width: min(820px, 100%);
-        max-height: 86vh;
-        overflow: auto;
-        border-radius: 14px;
-        border: 1px solid var(--border);
-        background: linear-gradient(180deg, rgba(17, 26, 45, 0.98), rgba(10, 16, 30, 0.96));
-        box-shadow: 0 18px 60px rgba(0, 0, 0, 0.55);
-        padding: 14px;
-      }
-
-      .modal-panel h2 {
-        margin: 0 0 6px;
-        font-size: 14px;
-        color: #cfe0ff;
-      }
-
-      .modal-panel ul {
-        margin: 10px 0 0 18px;
-        padding: 0;
-        color: var(--text);
-        line-height: 1.6;
-        font-size: 13px;
-      }
-
-      .modal-panel li {
-        margin: 7px 0;
-        color: var(--muted);
-      }
     </style>
   </head>
   <body>
@@ -332,22 +275,6 @@
         这是一个离线沙盒：输入模拟数据（或粘贴 JSON），推算 Reserve(BB) 曲线、Comfort/Fatigue，以及 Charge/Drain/Confidence。输出仅为健康洞察演示，不是医疗诊断。
       </p>
     </header>
-
-    <div id="upgradeModal" class="modal" hidden>
-      <div class="modal-backdrop" id="upgradeBackdrop"></div>
-      <div class="modal-panel" role="dialog" aria-modal="true" aria-labelledby="upgradeTitle">
-        <h2 id="upgradeTitle">更新提示</h2>
-        <p class="hint" id="upgradeVersion"></p>
-        <ul>
-          <li>大文件 <code>export.xml</code> 切片解析（本地处理）+ 解析进度条</li>
-          <li>新增心情/压力（<code>stateOfMind</code>/<code>som</code>）对 <code>Comfort</code> 与 <code>stressRate</code> 的修正（SoM 优先级高于 HRV）</li>
-          <li>新增耗能评级 <code>energyRating</code> 对 Workout 场景 <code>BodyBattery</code> 下降幅度的影响（未填写时从能量数据推断）</li>
-        </ul>
-        <div class="actions">
-          <button id="upgradeModalClose" class="primary">我知道了</button>
-        </div>
-      </div>
-    </div>
 
     <div class="wrap">
       <section class="card" id="left">
@@ -434,7 +361,6 @@
                   <th style="min-width: 90px">SoM</th>
                   <th style="min-width: 90px">步频(步/分)</th>
                   <th style="min-width: 110px">能量(kcal/分)</th>
-                  <th style="min-width: 100px">耗能评级(0-10)</th>
                   <th style="min-width: 70px">功率(W)</th>
                   <th style="min-width: 70px">SpO₂(%)</th>
                   <th style="min-width: 70px">RR</th>

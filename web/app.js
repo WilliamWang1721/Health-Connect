@@ -71,47 +71,6 @@
     wrap.setAttribute("aria-valuenow", String(Math.round(p)));
   }
 
-  const UPGRADE_ID = "2025-12-28";
-  const UPGRADE_STORAGE_KEY = "bb_upgrade_seen";
-
-  function maybeShowUpgradeModal() {
-    const modal = $("upgradeModal");
-    const closeBtn = $("upgradeModalClose");
-    const backdrop = $("upgradeBackdrop");
-    const version = $("upgradeVersion");
-    if (!modal || !closeBtn) return;
-
-    const v = window.BodyBatteryModel && window.BodyBatteryModel.VERSION ? String(window.BodyBatteryModel.VERSION) : null;
-    if (version) version.textContent = v ? `版本 ${v} · ${UPGRADE_ID}` : `版本 - · ${UPGRADE_ID}`;
-
-    let seen = null;
-    try {
-      seen = window.localStorage ? window.localStorage.getItem(UPGRADE_STORAGE_KEY) : null;
-    } catch (err) {
-      seen = null;
-    }
-    if (seen === UPGRADE_ID) return;
-
-    const onKeyDown = (e) => {
-      if (e && e.key === "Escape") close();
-    };
-
-    const close = () => {
-      modal.hidden = true;
-      document.removeEventListener("keydown", onKeyDown);
-      try {
-        if (window.localStorage) window.localStorage.setItem(UPGRADE_STORAGE_KEY, UPGRADE_ID);
-      } catch (err) {
-        // ignore
-      }
-    };
-
-    modal.hidden = false;
-    closeBtn.addEventListener("click", close, { once: true });
-    if (backdrop) backdrop.addEventListener("click", close, { once: true });
-    document.addEventListener("keydown", onKeyDown);
-  }
-
   function setActiveTab(name) {
     $("tabBtnSegments").classList.toggle("active", name === "segments");
     $("tabBtnJson").classList.toggle("active", name === "json");
@@ -212,7 +171,6 @@
       tr.appendChild(mkInputTd("stateOfMind", "0~1/100", "0.01"));
       tr.appendChild(mkInputTd("stepsPerMin", "步/分", "0.1"));
       tr.appendChild(mkInputTd("activeEnergyPerMin", "kcal/分", "0.1"));
-      tr.appendChild(mkInputTd("energyRating", "1~5/0~1", "0.1"));
       tr.appendChild(mkInputTd("powerW", "W", "1"));
       tr.appendChild(mkInputTd("spo2Pct", "%", "0.1"));
       tr.appendChild(mkInputTd("respRateBrpm", "次/分", "0.1"));
@@ -294,7 +252,6 @@
           stateOfMind: numOrNull(seg.stateOfMind),
           steps: stepsPerMin === null ? null : Math.round(stepsPerMin * dtMin),
           activeEnergyKcal: energyPerMin === null ? null : energyPerMin * dtMin,
-          energyRating: numOrNull(seg.energyRating),
           powerW: numOrNull(seg.powerW),
           spo2Pct: numOrNull(seg.spo2Pct),
           respRateBrpm: numOrNull(seg.respRateBrpm),
@@ -529,7 +486,7 @@
       { type: "sleep_rem", durationMin: 60, hrBpm: 59, hrvSdnnMs: 52, spo2Pct: 97, respRateBrpm: 14.7, wristTempC: 36.62 },
       { type: "awake_rest", durationMin: 45, hrBpm: 60, stepsPerMin: 0, activeEnergyPerMin: 0.2, stateOfMind: 0.75 },
       { type: "light", durationMin: 120, hrBpm: 92, stepsPerMin: 55, activeEnergyPerMin: 2 },
-      { type: "workout", durationMin: 45, hrBpm: 152, stepsPerMin: 30, activeEnergyPerMin: 9.5, energyRating: 4, powerW: 215 },
+      { type: "workout", durationMin: 45, hrBpm: 152, stepsPerMin: 30, activeEnergyPerMin: 9.5, powerW: 215 },
       { type: "active", durationMin: 90, hrBpm: 112, stepsPerMin: 85, activeEnergyPerMin: 4 },
       { type: "awake_rest", durationMin: 60, hrBpm: 64, stepsPerMin: 0, activeEnergyPerMin: 0.25 },
       { type: "light", durationMin: 180, hrBpm: 88, stepsPerMin: 45, activeEnergyPerMin: 1.6 },
@@ -1183,7 +1140,6 @@
       return;
     }
     wire();
-    maybeShowUpgradeModal();
   }
 
   if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", bootstrap);
