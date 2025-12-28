@@ -57,3 +57,4 @@ node server.js
 - 缺失项可以省略或写 `null`；模型会通过质量分与门控降权。
 - `sleepStage` 建议使用：`deep` / `core` / `rem` / `inBed` / `awake`
 - `stateOfMind` / `som`（可选）：心情/压力（SoM）；用于对 `Comfort` 与 `stressRate` 做小幅修正（SoM 优先级高于 HRV）
+- `energyRating`（可选）：耗能评级（支持 0–1、1–5、0–100 等输入）；用于放大/缩小 Workout 场景下的 `Drain`（未填写时从能量数据推断）
