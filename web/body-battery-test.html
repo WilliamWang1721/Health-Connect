@@ -270,10 +270,17 @@
       .modal {
         position: fixed;
         inset: 0;
-        display: grid;
-        place-items: center;
         padding: 18px;
         z-index: 60;
+      }
+
+      .modal[hidden] {
+        display: none;
+      }
+
+      .modal:not([hidden]) {
+        display: grid;
+        place-items: center;
       }
 
       .modal-backdrop {
