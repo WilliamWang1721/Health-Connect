@@ -62,6 +62,15 @@
     el.textContent = String(message);
   }
 
+  function setAppleProgress(pct) {
+    const wrap = $("appleProgress");
+    const bar = $("appleProgressBar");
+    if (!wrap || !bar) return;
+    const p = clamp(Number(pct), 0, 100);
+    bar.style.width = `${p}%`;
+    wrap.setAttribute("aria-valuenow", String(Math.round(p)));
+  }
+
   function setActiveTab(name) {
     $("tabBtnSegments").classList.toggle("active", name === "segments");
     $("tabBtnJson").classList.toggle("active", name === "json");
@@ -919,16 +928,17 @@
       return buf;
     };
 
-    const reader = file.stream().getReader();
     const decoder = new TextDecoder("utf-8");
     let carry = "";
     let lastProgressAt = 0;
 
-    while (true) {
-      const { value, done } = await reader.read();
-      if (done) break;
-      bytesRead += value.byteLength;
-      carry += decoder.decode(value, { stream: true });
+    // Chunked slicing: avoid loading big export.xml into memory at once.
+    const chunkBytes = 2 * 1024 * 1024;
+    const size = Number.isFinite(file.size) ? file.size : 0;
+    for (let offset = 0; offset < size; offset += chunkBytes) {
+      const buf = await file.slice(offset, offset + chunkBytes).arrayBuffer();
+      bytesRead += buf.byteLength;
+      carry += decoder.decode(buf, { stream: true });
       carry = processBuffer(carry);
       if (bytesRead - lastProgressAt >= 2 * 1024 * 1024) {
         lastProgressAt = bytesRead;
@@ -953,6 +963,7 @@
     try {
       showError($("appleError"), null);
       $("appleStatus").textContent = "";
+      setAppleProgress(0);
 
       const epochMinutes = clamp(numOrNull($("epochMinutes").value) ?? 5, 1, 60);
       const startStr = $("appleStartTime").value;
@@ -967,7 +978,9 @@
       $("appleImportAndRun").disabled = true;
 
       const onProgress = ({ bytesRead, totalBytes, recordSeen, recordUsed, workoutSeen }) => {
-        const pct = totalBytes ? `${Math.round((bytesRead / totalBytes) * 100)}%` : "-";
+        const pctNum = totalBytes ? (bytesRead / totalBytes) * 100 : null;
+        const pct = pctNum !== null ? `${Math.round(pctNum)}%` : "-";
+        if (pctNum !== null) setAppleProgress(pctNum);
         $("appleStatus").textContent = `解析中… ${pct} (${formatBytes(bytesRead)} / ${totalBytes ? formatBytes(totalBytes) : "?"}) · Record ${recordUsed}/${recordSeen} · Workout ${workoutSeen}`;
       };
 
@@ -989,6 +1002,7 @@
 
       $("jsonInput").value = JSON.stringify(cfg, null, 2);
       showError($("jsonError"), null);
+      setAppleProgress(100);
       $("appleStatus").textContent = `完成：epochs=${stats.epochCount} · RecordUsed=${stats.recordUsed}/${stats.recordSeen} · Workout=${stats.workoutSeen} · 读取=${formatBytes(stats.bytesRead)}`;
 
       setActiveTab("json");
@@ -996,6 +1010,7 @@
     } catch (err) {
       showError($("appleError"), err && err.stack ? err.stack : String(err));
       $("appleStatus").textContent = "";
+      setAppleProgress(0);
     } finally {
       $("appleImportToJson").disabled = false;
       $("appleImportAndRun").disabled = false;

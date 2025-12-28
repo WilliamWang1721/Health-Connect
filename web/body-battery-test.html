@@ -250,6 +250,22 @@
         color: var(--muted);
         font-size: 12px;
       }
+
+      .progress {
+        width: 100%;
+        height: 10px;
+        border-radius: 999px;
+        border: 1px solid var(--border);
+        background: rgba(10, 16, 30, 0.35);
+        overflow: hidden;
+      }
+
+      .progress > div {
+        height: 100%;
+        width: 0%;
+        background: linear-gradient(90deg, rgba(122, 162, 255, 0.35), rgba(122, 162, 255, 0.9));
+        transition: width 0.15s linear;
+      }
     </style>
   </head>
   <body>
@@ -404,6 +420,12 @@
             <button id="appleSetRange7d">最近 7d</button>
             <button id="appleImportToJson">导入到 JSON</button>
             <button id="appleImportAndRun" class="primary">导入并计算 BB</button>
+          </div>
+
+          <div style="margin-top: 10px">
+            <div class="progress" id="appleProgress" aria-label="解析进度" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0">
+              <div id="appleProgressBar"></div>
+            </div>
           </div>
 
           <div class="hint" id="appleStatus" style="margin-top: 8px"></div>
