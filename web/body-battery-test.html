@@ -1,9 +1,9 @@
 <!doctype html>
-<html lang="zh-Hans">
+<html lang="en">
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>Body Battery 测试页（Reserve/Comfort/Fatigue v0）</title>
+    <title>Body Battery Sandbox (Reserve/Comfort/Fatigue v0)</title>
     <style>
       :root {
         --bg: #0b1220;
@@ -358,130 +358,144 @@
   </head>
   <body>
     <header>
-      <h1>Body Battery 测试页（Reserve / Comfort / Fatigue v0）</h1>
+      <h1>Body Battery Sandbox (Reserve / Comfort / Fatigue v0)</h1>
       <p>
-        这是一个离线沙盒：输入模拟数据（或粘贴 JSON），推算 Reserve(BB) 曲线、Comfort/Fatigue，以及 Charge/Drain/Confidence。输出仅为健康洞察演示，不是医疗诊断。
+        Offline sandbox: input simulated data (or paste JSON) to estimate the Reserve(BB) curve, Comfort/Fatigue, and
+        Charge/Drain/Confidence. Output is for wellness insight only, not medical diagnosis.
       </p>
     </header>
 
     <div id="upgradeModal" class="modal" hidden>
       <div class="modal-backdrop" id="upgradeBackdrop"></div>
       <div class="modal-panel" role="dialog" aria-modal="true" aria-labelledby="upgradeTitle">
-        <h2 id="upgradeTitle">更新提示</h2>
+        <h2 id="upgradeTitle">Update Notes</h2>
         <p class="hint" id="upgradeVersion"></p>
         <ul>
-          <li>大文件 export.xml 切片解析（本地处理）+ 解析进度条</li>
-          <li>增加心情与压力对于人体舒适度的影响算法</li>
-          <li>增加耗能评级对运动所带来的 BodyBattery 下降幅度影响算法</li>
+          <li>Chunked parsing for large export.xml (local) + progress bar</li>
+          <li>Add mood and stress impact on comfort scoring</li>
+          <li>Add energy rating impact on workout drain</li>
         </ul>
         <div class="actions">
-          <button id="upgradeModalClose" class="primary">我知道了</button>
+          <button id="upgradeModalClose" class="primary">Got it</button>
         </div>
       </div>
     </div>
 
-    <div id="thanks">致谢：小红书@是江尾呀QAQ</div>
+    <div id="thanks">Credits: Xiaohongshu @是江尾呀QAQ</div>
 
     <div class="wrap">
       <section class="card" id="left">
-        <h2>参数与基线</h2>
+        <h2>Parameters & Baselines</h2>
         <div class="row two">
-          <label>Epoch（分钟）<input id="epochMinutes" type="number" min="1" step="1" value="5" /></label>
-          <label>初始 Reserve(BB)（0–100）<input id="initialBB" type="number" min="0" max="100" step="1" value="70" /></label>
+          <label>Epoch (minutes)<input id="epochMinutes" type="number" min="1" step="1" value="5" /></label>
+          <label>Initial Reserve(BB) (0-100)<input id="initialBB" type="number" min="0" max="100" step="1" value="70" /></label>
         </div>
 
         <details open>
-          <summary>个人基线（可选，不填则从输入估计 + 默认值兜底）</summary>
+          <summary>Personal baselines (optional; inferred from input + defaults if empty)</summary>
           <div class="row two" style="margin-top: 10px">
-            <label>RHR_base（bpm）<input id="rhrBpm" type="number" step="0.1" placeholder="例如 58" /></label>
-            <label>HRV_base（SDNN, ms）<input id="hrvSdnnMs" type="number" step="0.1" placeholder="例如 55" /></label>
-            <label>SpO₂_base（%）<input id="spo2Pct" type="number" step="0.1" placeholder="例如 97" /></label>
-            <label>RR_base（次/分）<input id="respRateBrpm" type="number" step="0.1" placeholder="例如 14" /></label>
-            <label>Temp_base（°C）<input id="wristTempC" type="number" step="0.01" placeholder="例如 36.5" /></label>
-            <label>FTP（W，可选）<input id="ftpW" type="number" step="1" placeholder="例如 220" /></label>
-            <label>HR_max（bpm，可选）<input id="hrMaxBpm" type="number" step="1" placeholder="例如 190" /></label>
+            <label>RHR_base (bpm)<input id="rhrBpm" type="number" step="0.1" placeholder="e.g. 58" /></label>
+            <label>HRV_base (SDNN, ms)<input id="hrvSdnnMs" type="number" step="0.1" placeholder="e.g. 55" /></label>
+            <label>SpO2_base (%)<input id="spo2Pct" type="number" step="0.1" placeholder="e.g. 97" /></label>
+            <label>RR_base (brpm)<input id="respRateBrpm" type="number" step="0.1" placeholder="e.g. 14" /></label>
+            <label>Temp_base (C)<input id="wristTempC" type="number" step="0.01" placeholder="e.g. 36.5" /></label>
+            <label>FTP (W, optional)<input id="ftpW" type="number" step="1" placeholder="e.g. 220" /></label>
+            <label>HR_max (bpm, optional)<input id="hrMaxBpm" type="number" step="1" placeholder="e.g. 190" /></label>
           </div>
         </details>
 
         <details>
-          <summary>行为基线（10 天个体化，可选）</summary>
+          <summary>Behavior baseline (10-day personalization, optional)</summary>
           <div class="row two" style="margin-top: 10px">
-            <label class="checkbox"><input id="behaviorBaselineEnabled" type="checkbox" />启用行为基线</label>
-            <label>基线天数<input id="behaviorBaselineDays" type="number" min="1" step="1" value="10" /></label>
+            <label class="checkbox"><input id="behaviorBaselineEnabled" type="checkbox" />Enable behavior baseline</label>
+            <label>Baseline days<input id="behaviorBaselineDays" type="number" min="1" step="1" value="10" /></label>
           </div>
           <p class="hint" style="margin-top: 8px">
-            模型会用前 N 天构建睡眠/训练的“个人行为基线”，并从第 N+1 天起对异常动作进行幅度缩放（例如：睡眠时长虽不在通用健康区间，但若在个人基线内，则恢复幅度不再被打折）。
+            The model builds a personal baseline from the first N days of sleep/workout behavior, then from day N+1
+            scales recovery/drain for unusual behaviors (e.g. sleep duration outside generic health ranges but within
+            your personal baseline will not be discounted).
           </p>
         </details>
 
         <details>
-          <summary>高级参数（可选）</summary>
+	          <summary>Advanced parameters (optional)</summary>
+	          <div class="row two" style="margin-top: 10px">
+	            <label>Sleep charge baseline (BB/h)<input id="baseSleepChargePerHour" type="number" step="0.1" placeholder="default 10.5" /></label>
+	            <label>Rest charge baseline (BB/h)<input id="baseRestChargePerHour" type="number" step="0.1" placeholder="default 2" /></label>
+	            <label>Mind charge baseline (BB/h)<input id="baseMindChargePerHour" type="number" step="0.1" placeholder="default 4" /></label>
+	            <label>Workout max drain (BB/h)<input id="loadDrainWorkoutMaxPerHour" type="number" step="0.1" placeholder="default 35" /></label>
+	            <label>Workout HR weight<input id="workoutHrWeight" type="number" step="0.01" placeholder="default 1.2" /></label>
+	            <label>Daily max drain (BB/h)<input id="loadDrainActiveMaxPerHour" type="number" step="0.1" placeholder="default 18" /></label>
+	          </div>
           <div class="row two" style="margin-top: 10px">
-            <label>睡眠充电基准（BB/h）<input id="baseSleepChargePerHour" type="number" step="0.1" placeholder="默认 9" /></label>
-            <label>静息充电基准（BB/h）<input id="baseRestChargePerHour" type="number" step="0.1" placeholder="默认 2" /></label>
-            <label>冥想充电基准（BB/h）<input id="baseMindChargePerHour" type="number" step="0.1" placeholder="默认 4" /></label>
-            <label>训练最大放电（BB/h）<input id="loadDrainWorkoutMaxPerHour" type="number" step="0.1" placeholder="默认 35" /></label>
-            <label>日常最大放电（BB/h）<input id="loadDrainActiveMaxPerHour" type="number" step="0.1" placeholder="默认 18" /></label>
+            <label>High activity max drain (BB/h)<input id="loadDrainHighMaxPerHour" type="number" step="0.1" placeholder="default 26" /></label>
+            <label>Light max drain (BB/h)<input id="loadDrainLightMaxPerHour" type="number" step="0.1" placeholder="default 12" /></label>
+            <label>Inactive max drain (BB/h)<input id="loadDrainInactiveMaxPerHour" type="number" step="0.1" placeholder="default 6" /></label>
+            <label>State light min (0-1)<input id="stateLightMin01" type="number" step="0.01" placeholder="default 0.15" /></label>
+            <label>State active min (0-1)<input id="stateActiveMin01" type="number" step="0.01" placeholder="default 0.4" /></label>
+            <label>State high min (0-1)<input id="stateHighMin01" type="number" step="0.01" placeholder="default 0.7" /></label>
+            <label>Rest charge min potential (0-1)<input id="restChargeMinPotential01" type="number" step="0.01" placeholder="default 0.2" /></label>
+            <label>Rest charge stress max (0-5)<input id="restChargeStressIndexMax" type="number" step="0.1" placeholder="default 1.8" /></label>
+            <label>Rest charge anom max<input id="restChargeAnomIndexMax" type="number" step="0.1" placeholder="default 1.2" /></label>
+            <label>Rest charge gain exponent<input id="restChargeGainExponent" type="number" step="0.01" placeholder="default 1.25" /></label>
           </div>
           <div class="row two" style="margin-top: 10px">
-            <label>入睡窗口（min）<input id="tempOnsetWindowMinutes" type="number" step="1" placeholder="默认 60" /></label>
-            <label>入睡温升上限（°C）<input id="tempOnsetBeneficialMaxC" type="number" step="0.01" placeholder="默认 0.45" /></label>
-            <label>过热阈值（°C）<input id="tempOverheatStartC" type="number" step="0.01" placeholder="默认 0.35" /></label>
-            <label>发热样阈值（°C）<input id="tempFeverStartC" type="number" step="0.01" placeholder="默认 0.9" /></label>
-            <label>Temp 异常权重<input id="tempAnomWeight" type="number" step="0.05" placeholder="默认 0.9" /></label>
-            <label>Comfort 惩罚/Index<input id="comfortPenaltyPerIndex" type="number" step="1" placeholder="默认 12" /></label>
-            <label>Fatigue=100 的 Drain/h<input id="fatigueDrainPerHourFor100" type="number" step="1" placeholder="默认 40" /></label>
+            <label>Sleep onset window (min)<input id="tempOnsetWindowMinutes" type="number" step="1" placeholder="default 60" /></label>
+            <label>Sleep-onset temp rise cap (C)<input id="tempOnsetBeneficialMaxC" type="number" step="0.01" placeholder="default 0.45" /></label>
+            <label>Overheat threshold (C)<input id="tempOverheatStartC" type="number" step="0.01" placeholder="default 0.35" /></label>
+            <label>Fever-like threshold (C)<input id="tempFeverStartC" type="number" step="0.01" placeholder="default 0.9" /></label>
+            <label>Temp anomaly weight<input id="tempAnomWeight" type="number" step="0.05" placeholder="default 0.9" /></label>
+            <label>Comfort penalty / index<input id="comfortPenaltyPerIndex" type="number" step="1" placeholder="default 12" /></label>
+            <label>Fatigue=100 drain per hour<input id="fatigueDrainPerHourFor100" type="number" step="1" placeholder="default 40" /></label>
           </div>
           <div class="row two" style="margin-top: 10px">
-            <label>恢复窗口（min）<input id="postActivityRecoveryWindowMinutes" type="number" step="1" placeholder="默认 90" /></label>
-            <label>最大恢复时长（min）<input id="postActivityRecoveryMaxMinutes" type="number" step="1" placeholder="默认 45" /></label>
-            <label>CalmRec 最大充电（BB/h）<input id="postActivityRecoveryChargeMaxPerHour" type="number" step="0.1" placeholder="默认 4" /></label>
-            <label>Stress 抑制 power<input id="postActivityRecoveryStressSuppressionPower" type="number" step="1" placeholder="默认 2" /></label>
-            <label>Stress 抑制最小系数<input id="postActivityRecoveryStressSuppressionMinFactor" type="number" step="0.01" placeholder="默认 0.08" /></label>
-            <label>恢复期最大活动强度（0-1）<input id="postActivityRecoveryMaxMovementIntensity01" type="number" step="0.01" placeholder="默认 0.15" /></label>
+            <label>Recovery window (min)<input id="postActivityRecoveryWindowMinutes" type="number" step="1" placeholder="default 90" /></label>
+            <label>Max recovery duration (min)<input id="postActivityRecoveryMaxMinutes" type="number" step="1" placeholder="default 45" /></label>
+            <label>CalmRec max charge (BB/h)<input id="postActivityRecoveryChargeMaxPerHour" type="number" step="0.1" placeholder="default 4" /></label>
+            <label>Stress suppression power<input id="postActivityRecoveryStressSuppressionPower" type="number" step="1" placeholder="default 2" /></label>
+            <label>Stress suppression min factor<input id="postActivityRecoveryStressSuppressionMinFactor" type="number" step="0.01" placeholder="default 0.08" /></label>
+            <label>Max movement intensity in recovery (0-1)<input id="postActivityRecoveryMaxMovementIntensity01" type="number" step="0.01" placeholder="default 0.15" /></label>
           </div>
         </details>
       </section>
 
       <section class="card" id="right">
-        <h2>输入与输出</h2>
+        <h2>Input & Output</h2>
 
         <div class="tabs">
-          <button class="tab active" data-tab="segments" id="tabBtnSegments">分段输入</button>
-          <button class="tab" data-tab="json" id="tabBtnJson">JSON 输入</button>
-          <button class="tab" data-tab="apple" id="tabBtnApple">Apple Health 导入</button>
+          <button class="tab active" data-tab="segments" id="tabBtnSegments">Segment Input</button>
+          <button class="tab" data-tab="json" id="tabBtnJson">JSON Input</button>
+          <button class="tab" data-tab="apple" id="tabBtnApple">Apple Health Import</button>
         </div>
 
         <div id="tabSegments">
           <div class="row two">
-            <label>开始时间（本地）<input id="startTime" type="datetime-local" /></label>
-            <label class="hint"
-              >建议：用“分段输入”快速构造睡眠/训练/日常段；不填视为现在。</label
-            >
+            <label>Start time (local)<input id="startTime" type="datetime-local" /></label>
+            <label class="hint">Tip: use Segment Input to quickly build sleep/workout/daily blocks; leave empty to use now.</label>
           </div>
 
           <div class="actions">
-            <button id="addSegment">添加分段</button>
-            <button id="loadSample" class="primary">载入示例</button>
-            <button id="clearSegments" class="danger">清空</button>
-            <button id="runSegments" class="primary">计算 BB</button>
+            <button id="addSegment">Add Segment</button>
+            <button id="loadSample" class="primary">Load Sample</button>
+            <button id="clearSegments" class="danger">Clear</button>
+            <button id="runSegments" class="primary">Compute BB</button>
           </div>
 
           <div class="scroll" style="margin-top: 10px">
             <table id="segmentsTable">
               <thead>
                 <tr>
-                  <th style="min-width: 140px">类型</th>
-                  <th style="min-width: 80px">时长(min)</th>
+                  <th style="min-width: 140px">Type</th>
+                  <th style="min-width: 80px">Duration (min)</th>
                   <th style="min-width: 70px">HR</th>
-                  <th style="min-width: 80px">HRV(ms)</th>
-                  <th style="min-width: 90px">步频(步/分)</th>
-                  <th style="min-width: 110px">能量(kcal/分)</th>
-                  <th style="min-width: 70px">功率(W)</th>
-                  <th style="min-width: 70px">SpO₂(%)</th>
+                  <th style="min-width: 80px">HRV (ms)</th>
+                  <th style="min-width: 90px">Steps/min</th>
+                  <th style="min-width: 110px">Energy (kcal/min)</th>
+                  <th style="min-width: 70px">Power (W)</th>
+                  <th style="min-width: 70px">SpO2 (%)</th>
                   <th style="min-width: 70px">RR</th>
-                  <th style="min-width: 90px">腕温(°C)</th>
-                  <th style="min-width: 70px">操作</th>
+                  <th style="min-width: 90px">Wrist Temp (C)</th>
+                  <th style="min-width: 70px">Actions</th>
                 </tr>
               </thead>
               <tbody></tbody>
@@ -493,54 +507,54 @@
 
         <div id="tabJson" hidden>
           <p class="hint">
-            JSON 结构：<span style="font-family: var(--mono)">{"epochMinutes":5,"initialBB":70,"baselines":{...},"epochs":[...]}</span>
+            JSON format: <span style="font-family: var(--mono)">{"epochMinutes":5,"initialBB":70,"baselines":{...},"epochs":[...]}</span>
           </p>
           <textarea id="jsonInput" spellcheck="false"></textarea>
           <div class="actions">
-            <button id="loadSampleJson">载入示例 JSON</button>
-            <button id="runJson" class="primary">计算 BB</button>
+            <button id="loadSampleJson">Load Sample JSON</button>
+            <button id="runJson" class="primary">Compute BB</button>
           </div>
           <div class="error" id="jsonError" hidden></div>
         </div>
 
         <div id="tabApple" hidden>
           <p class="hint">
-            支持导入 Apple Health 导出的 <span style="font-family: var(--mono)">export.xml</span>。
-            如果你下载到的是 <span style="font-family: var(--mono)">.zip</span>，请先解压后选择其中的
-            <span style="font-family: var(--mono)">export.xml</span>。
+            Supports Apple Health <span style="font-family: var(--mono)">export.xml</span> and HealthExportCSV
+            <span style="font-family: var(--mono)">.csv</span> exports (select multiple CSV files). If you downloaded a
+            <span style="font-family: var(--mono)">.zip</span>, unzip it first.
           </p>
 
           <div class="row">
-            <label>选择文件（export.xml / export.zip）
-              <input id="appleHealthFile" type="file" accept=".xml,.zip,application/zip,text/xml,application/xml" />
+            <label>Choose file(s) (export.xml / HealthExportCSV *.csv)
+              <input id="appleHealthFile" type="file" multiple accept=".xml,.csv,.zip,application/zip,text/xml,application/xml,text/csv" />
             </label>
           </div>
 
           <div class="row two" style="margin-top: 10px">
-            <label>开始时间（本地）<input id="appleStartTime" type="datetime-local" /></label>
-            <label>结束时间（本地）<input id="appleEndTime" type="datetime-local" /></label>
+            <label>Start time (local)<input id="appleStartTime" type="datetime-local" /></label>
+            <label>End time (local)<input id="appleEndTime" type="datetime-local" /></label>
           </div>
 
           <div class="row two" style="margin-top: 10px">
             <label style="display: flex; gap: 8px; align-items: center">
               <input id="appleIncludeWorkouts" type="checkbox" checked />
-              <span>标记 Workout 区间</span>
+              <span>Mark workout intervals</span>
             </label>
             <label style="display: flex; gap: 8px; align-items: center">
               <input id="appleIncludeMindful" type="checkbox" checked />
-              <span>标记 Mindful Session</span>
+              <span>Mark mindful sessions</span>
             </label>
           </div>
 
           <div class="actions">
-            <button id="appleSetRange24h">最近 24h</button>
-            <button id="appleSetRange7d">最近 7d</button>
-            <button id="appleImportToJson">导入到 JSON</button>
-            <button id="appleImportAndRun" class="primary">导入并计算 BB</button>
+            <button id="appleSetRange24h">Last 24h</button>
+            <button id="appleSetRange7d">Last 7d</button>
+            <button id="appleImportToJson">Import to JSON</button>
+            <button id="appleImportAndRun" class="primary">Import & Compute BB</button>
           </div>
 
           <div style="margin-top: 10px">
-            <div class="progress" id="appleProgress" aria-label="解析进度" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0">
+            <div class="progress" id="appleProgress" aria-label="Parsing progress" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0">
               <div id="appleProgressBar"></div>
             </div>
           </div>
@@ -554,7 +568,7 @@
         <div class="row">
           <div id="summaryBar" style="display: flex; flex-wrap: wrap; gap: 8px"></div>
           <details open>
-            <summary>计算基线（模型使用）</summary>
+            <summary>Computed baselines (model uses)</summary>
             <div class="scroll" style="margin-top: 10px; max-height: 220px">
               <table id="baselinesTable" class="kv-table">
                 <thead>
@@ -567,30 +581,30 @@
               </table>
             </div>
             <div class="actions" style="margin-top: 10px">
-              <button id="copyBaselinesJson">复制 baselines JSON</button>
+              <button id="copyBaselinesJson">Copy baselines JSON</button>
             </div>
           </details>
           <details>
-            <summary>行为基线（behaviorBaseline）</summary>
+            <summary>Behavior baseline (behaviorBaseline)</summary>
             <div class="hint" id="behaviorBaselineHint" style="margin-top: 8px"></div>
             <textarea id="behaviorBaselineJson" spellcheck="false" readonly></textarea>
           </details>
           <canvas id="chart" width="980" height="340"></canvas>
           <details>
-            <summary>结果表（前 250 行）</summary>
+            <summary>Result table (first 250 rows)</summary>
             <div class="scroll" style="margin-top: 10px">
               <table id="resultTable">
                 <thead>
                   <tr>
                     <th>#</th>
-                    <th>时间</th>
+                    <th>Time</th>
                     <th>Context</th>
                     <th>BB</th>
                     <th>Comfort</th>
                     <th>Fatigue</th>
-                    <th>TempΔ</th>
+                    <th>Temp delta</th>
                     <th>TempMode</th>
-                    <th>Δ</th>
+                    <th>Delta</th>
                     <th>Charge</th>
                     <th>CalmRec</th>
                     <th>Drain</th>
@@ -602,7 +616,7 @@
             </div>
           </details>
           <details>
-            <summary>结果 JSON（可导出/复现）</summary>
+            <summary>Result JSON (export/replay)</summary>
             <textarea id="jsonOutput" spellcheck="false" readonly></textarea>
           </details>
         </div>

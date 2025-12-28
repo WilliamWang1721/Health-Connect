@@ -127,9 +127,11 @@
       { value: "sleep_core", label: "睡眠：Core/Light" },
       { value: "sleep_rem", label: "睡眠：REM" },
       { value: "sleep_inbed", label: "在床（inBed）" },
+      { value: "auto", label: "自动（由引擎判断状态）" },
       { value: "awake_rest", label: "清醒静息（Rest）" },
       { value: "meditation", label: "正念/冥想（Mindful）" },
       { value: "workout", label: "训练（Workout）" },
+      { value: "high", label: "高强度活动（High）" },
       { value: "light", label: "轻活动（Light）" },
       { value: "active", label: "活动（Active）" },
       { value: "awake", label: "清醒（无明显活动）" },
@@ -146,12 +148,16 @@
         return { durationMin: 90, hrBpm: 58, hrvSdnnMs: 55, spo2Pct: 97, respRateBrpm: 14.5, wristTempC: 36.6 };
       case "sleep_inbed":
         return { durationMin: 30, hrBpm: 60, hrvSdnnMs: 50, spo2Pct: 97, respRateBrpm: 14, wristTempC: 36.6 };
+      case "auto":
+        return { durationMin: 60, hrBpm: 74, hrvSdnnMs: null, stepsPerMin: 8, activeEnergyPerMin: 0.7 };
       case "awake_rest":
         return { durationMin: 45, hrBpm: 60, hrvSdnnMs: null, stepsPerMin: 0, activeEnergyPerMin: 0.2 };
       case "meditation":
         return { durationMin: 15, hrBpm: 58, hrvSdnnMs: 60, stepsPerMin: 0, activeEnergyPerMin: 0.1 };
       case "workout":
         return { durationMin: 45, hrBpm: 150, stepsPerMin: 20, activeEnergyPerMin: 9, powerW: 210 };
+      case "high":
+        return { durationMin: 35, hrBpm: 135, stepsPerMin: 110, activeEnergyPerMin: 6.5 };
       case "light":
         return { durationMin: 120, hrBpm: 95, stepsPerMin: 60, activeEnergyPerMin: 2.2 };
       case "active":
@@ -270,12 +276,16 @@
       const explicitContext =
         sleepStage !== null
           ? { kind: "SLEEP", sleepStage }
+          : seg.type === "auto"
+            ? null
           : seg.type === "awake_rest"
             ? { kind: "AWAKE_REST" }
             : seg.type === "light"
               ? { kind: "LIGHT_ACTIVITY" }
               : seg.type === "active"
                 ? { kind: "ACTIVE" }
+                : seg.type === "high"
+                  ? { kind: "HIGH_ACTIVITY" }
                 : seg.type === "awake"
                   ? { kind: "AWAKE" }
                   : seg.type === "meditation"
@@ -336,7 +346,18 @@
     setIf("baseRestChargePerHour", "baseRestChargePerHour");
     setIf("baseMindChargePerHour", "baseMindChargePerHour");
     setIf("loadDrainWorkoutMaxPerHour", "loadDrainWorkoutMaxPerHour");
+    setIf("workoutHrWeight", "workoutHrWeight");
+    setIf("loadDrainHighMaxPerHour", "loadDrainHighMaxPerHour");
     setIf("loadDrainActiveMaxPerHour", "loadDrainActiveMaxPerHour");
+    setIf("loadDrainLightMaxPerHour", "loadDrainLightMaxPerHour");
+    setIf("loadDrainInactiveMaxPerHour", "loadDrainInactiveMaxPerHour");
+    setIf("stateLightMin01", "stateLightMin01");
+    setIf("stateActiveMin01", "stateActiveMin01");
+    setIf("stateHighMin01", "stateHighMin01");
+    setIf("restChargeMinPotential01", "restChargeMinPotential01");
+    setIf("restChargeStressIndexMax", "restChargeStressIndexMax");
+    setIf("restChargeAnomIndexMax", "restChargeAnomIndexMax");
+    setIf("restChargeGainExponent", "restChargeGainExponent");
     setIf("tempOnsetWindowMinutes", "tempOnsetWindowMinutes");
     setIf("tempOnsetBeneficialMaxC", "tempOnsetBeneficialMaxC");
     setIf("tempOverheatStartC", "tempOverheatStartC");
@@ -655,10 +676,11 @@
       { type: "awake_rest", durationMin: 45, hrBpm: 60, stepsPerMin: 0, activeEnergyPerMin: 0.2 },
       { type: "light", durationMin: 120, hrBpm: 92, stepsPerMin: 55, activeEnergyPerMin: 2 },
       { type: "workout", durationMin: 45, hrBpm: 152, stepsPerMin: 30, activeEnergyPerMin: 9.5, powerW: 215 },
+      { type: "high", durationMin: 25, hrBpm: 138, stepsPerMin: 105, activeEnergyPerMin: 6.2 },
       { type: "active", durationMin: 90, hrBpm: 112, stepsPerMin: 85, activeEnergyPerMin: 4 },
       { type: "awake_rest", durationMin: 60, hrBpm: 64, stepsPerMin: 0, activeEnergyPerMin: 0.25 },
       { type: "light", durationMin: 180, hrBpm: 88, stepsPerMin: 45, activeEnergyPerMin: 1.6 },
-      { type: "awake", durationMin: 180, hrBpm: 74, stepsPerMin: 5, activeEnergyPerMin: 0.8 },
+      { type: "auto", durationMin: 180, hrBpm: 74, stepsPerMin: 5, activeEnergyPerMin: 0.8 },
     ];
 
     renderSegments();
@@ -732,14 +754,25 @@
 
   function sleepStageFromAppleHealth(value) {
     if (value === null || value === undefined) return null;
-    const s = String(value);
+    const s = String(value).trim();
+    const lower = s.toLowerCase();
+
     if (s === "HKCategoryValueSleepAnalysisInBed" || s === "0") return "inBed";
     if (s === "HKCategoryValueSleepAnalysisAsleep" || s === "1") return "core";
-    if (s.includes("AsleepDeep")) return "deep";
-    if (s.includes("AsleepCore")) return "core";
-    if (s.includes("AsleepREM")) return "rem";
-    if (s.includes("Awake")) return "awake";
-    if (s.includes("Asleep")) return "core";
+
+    if (lower === "in bed" || lower === "inbed") return "inBed";
+    if (lower === "awake") return "awake";
+    if (lower === "rem") return "rem";
+    if (lower === "core") return "core";
+    if (lower === "deep") return "deep";
+    if (lower === "asleep") return "core";
+
+    if (lower.includes("asleep") && lower.includes("deep")) return "deep";
+    if (lower.includes("asleep") && lower.includes("rem")) return "rem";
+    if (lower.includes("asleep") && lower.includes("core")) return "core";
+    if (lower.includes("in bed")) return "inBed";
+    if (lower.includes("awake")) return "awake";
+    if (lower.includes("asleep")) return "core";
     return null;
   }
 
@@ -762,6 +795,129 @@
     const buf = await file.slice(0, 4).arrayBuffer();
     const b = new Uint8Array(buf);
     return b.length >= 2 && b[0] === 0x50 && b[1] === 0x4b; // PK..
+  }
+
+  function guessCsvDelimiter(line) {
+    const s = String(line || "");
+    const comma = (s.match(/,/g) || []).length;
+    const semi = (s.match(/;/g) || []).length;
+    const tab = (s.match(/\t/g) || []).length;
+    if (semi > comma && semi > tab) return ";";
+    if (tab > comma && tab > semi) return "\t";
+    return ",";
+  }
+
+  function parseCsvLine(line, delimiter) {
+    const out = [];
+    let cur = "";
+    let inQuotes = false;
+    const d = delimiter || ",";
+
+    for (let i = 0; i < line.length; i++) {
+      const ch = line[i];
+      if (inQuotes) {
+        if (ch === '"') {
+          if (i + 1 < line.length && line[i + 1] === '"') {
+            cur += '"';
+            i++;
+          } else {
+            inQuotes = false;
+          }
+        } else {
+          cur += ch;
+        }
+        continue;
+      }
+
+      if (ch === '"') {
+        inQuotes = true;
+        continue;
+      }
+
+      if (ch === d) {
+        out.push(cur);
+        cur = "";
+        continue;
+      }
+
+      cur += ch;
+    }
+    out.push(cur);
+    return out;
+  }
+
+  function normalizeCsvHeaderName(name) {
+    return String(name || "")
+      .replace(/^\ufeff/, "")
+      .trim()
+      .toLowerCase()
+      .replace(/[\s_-]+/g, "");
+  }
+
+  function buildCsvHeaderIndex(headerFields) {
+    const idx = new Map();
+    for (let i = 0; i < headerFields.length; i++) {
+      const key = normalizeCsvHeaderName(headerFields[i]);
+      if (!key) continue;
+      if (!idx.has(key)) idx.set(key, i);
+    }
+    return idx;
+  }
+
+  function findCsvColumn(headerIndex, aliases) {
+    for (const a of aliases) {
+      const i = headerIndex.get(a);
+      if (i !== undefined) return i;
+    }
+    return -1;
+  }
+
+  function inferAppleHealthRecordTypeFromHint(hint) {
+    if (!hint) return null;
+    const s = String(hint).trim().toLowerCase();
+
+    if (s.includes("hkquantitytypeidentifierheartratevariabilitysdnn") || (s.includes("variability") && s.includes("sdnn")) || s.includes("hrv")) {
+      return "HKQuantityTypeIdentifierHeartRateVariabilitySDNN";
+    }
+    if (s.includes("hkquantitytypeidentifierheartrate") || s.includes("heart rate") || s.includes("heartrate")) return "HKQuantityTypeIdentifierHeartRate";
+    if (s.includes("hkquantitytypeidentifierstepcount") || s.includes("step count") || s.includes("steps")) return "HKQuantityTypeIdentifierStepCount";
+    if (s.includes("hkquantitytypeidentifieractiveenergyburned") || s.includes("active energy") || s.includes("energy burned") || s.includes("activeenergy")) {
+      return "HKQuantityTypeIdentifierActiveEnergyBurned";
+    }
+    if (s.includes("hkquantitytypeidentifieroxygensaturation") || s.includes("oxygen saturation") || s.includes("spo2") || s.includes("o2 saturation")) {
+      return "HKQuantityTypeIdentifierOxygenSaturation";
+    }
+    if (s.includes("hkquantitytypeidentifierrespiratoryrate") || s.includes("respiratory rate") || s.includes("respiration") || s.includes("breath")) {
+      return "HKQuantityTypeIdentifierRespiratoryRate";
+    }
+    if (s.includes("hkcategorytypeidentifiersleepanalysis") || s.includes("sleep analysis") || s.includes("sleep")) return "HKCategoryTypeIdentifierSleepAnalysis";
+    if (s.includes("hkcategorytypeidentifiermindfulsession") || s.includes("mindful")) return "HKCategoryTypeIdentifierMindfulSession";
+    if (
+      s.includes("hkquantitytypeidentifierapplesleepingwristtemperature") ||
+      s.includes("sleeping wrist temperature") ||
+      s.includes("wrist temperature") ||
+      (s.includes("temperature") && s.includes("wrist"))
+    ) {
+      return "HKQuantityTypeIdentifierAppleSleepingWristTemperature";
+    }
+    if (s.includes("hkquantitytypeidentifierwristtemperature")) return "HKQuantityTypeIdentifierWristTemperature";
+    if (s.includes("hkquantitytypeidentifierbodytemperature") || (s.includes("temperature") && s.includes("body"))) return "HKQuantityTypeIdentifierBodyTemperature";
+    if (s.includes("hkquantitytypeidentifiercyclingpower") || (s.includes("cycling") && s.includes("power"))) return "HKQuantityTypeIdentifierCyclingPower";
+    if (s.includes("hkquantitytypeidentifierrunningpower") || (s.includes("running") && s.includes("power"))) return "HKQuantityTypeIdentifierRunningPower";
+    return null;
+  }
+
+  function resolveAppleHealthRecordType(typeRaw, fileInferredType, fileName) {
+    const raw = typeRaw === null || typeRaw === undefined ? "" : String(typeRaw).trim();
+    if (raw) {
+      if (raw.startsWith("HKQuantityTypeIdentifier") || raw.startsWith("HKCategoryTypeIdentifier")) return raw;
+      const inferredFromRaw = inferAppleHealthRecordTypeFromHint(raw);
+      if (inferredFromRaw) return inferredFromRaw;
+    }
+    if (fileInferredType) return fileInferredType;
+    const inferredFromName = inferAppleHealthRecordTypeFromHint(fileName);
+    if (inferredFromName) return inferredFromName;
+    return null;
   }
 
   function buildAppleHealthEpochGrid(startMs, endMs, epochMinutes) {
@@ -798,6 +954,113 @@
       workoutType: Array.from({ length: count }, () => null),
       mindful: Array.from({ length: count }, () => false),
     };
+  }
+
+  const APPLE_HEALTH_WANT_TYPES = new Set([
+    "HKQuantityTypeIdentifierHeartRate",
+    "HKQuantityTypeIdentifierHeartRateVariabilitySDNN",
+    "HKQuantityTypeIdentifierStepCount",
+    "HKQuantityTypeIdentifierActiveEnergyBurned",
+    "HKQuantityTypeIdentifierOxygenSaturation",
+    "HKQuantityTypeIdentifierRespiratoryRate",
+    "HKCategoryTypeIdentifierSleepAnalysis",
+    "HKCategoryTypeIdentifierMindfulSession",
+    "HKQuantityTypeIdentifierAppleSleepingWristTemperature",
+    "HKQuantityTypeIdentifierWristTemperature",
+    "HKQuantityTypeIdentifierBodyTemperature",
+    "HKQuantityTypeIdentifierCyclingPower",
+    "HKQuantityTypeIdentifierRunningPower",
+  ]);
+
+  function applyAppleHealthRecordToGrid(grid, record, options) {
+    const type = record && record.type ? String(record.type) : null;
+    if (!type || !APPLE_HEALTH_WANT_TYPES.has(type)) return false;
+
+    const s0 = Number(record.startMs);
+    const e0 = Number(record.endMs);
+    if (!Number.isFinite(s0) || !Number.isFinite(e0)) return false;
+    const s = Math.min(s0, e0);
+    const e = Math.max(s0, e0);
+    if (e <= grid.startMs || s >= grid.endMs) return false;
+
+    const includeMindful = options && options.includeMindful !== undefined ? Boolean(options.includeMindful) : true;
+    const valueRaw = record.value;
+    const unit = record.unit;
+
+    if (type === "HKCategoryTypeIdentifierSleepAnalysis") {
+      const stage = sleepStageFromAppleHealth(valueRaw);
+      if (!stage) return false;
+      addSleepStage(grid, stage, s, e);
+      return true;
+    }
+
+    if (type === "HKCategoryTypeIdentifierMindfulSession") {
+      if (!includeMindful) return false;
+      setBooleanFlag(grid.mindful, grid, s, e);
+      return true;
+    }
+
+    if (type === "HKQuantityTypeIdentifierHeartRate") {
+      const v = Number(valueRaw);
+      if (!Number.isFinite(v)) return false;
+      addWeightedAvg(grid.hrSum, grid.hrW, grid, v, s, e);
+      return true;
+    }
+
+    if (type === "HKQuantityTypeIdentifierHeartRateVariabilitySDNN") {
+      const v = Number(valueRaw);
+      if (!Number.isFinite(v)) return false;
+      addWeightedAvg(grid.hrvSum, grid.hrvW, grid, v, s, e);
+      return true;
+    }
+
+    if (type === "HKQuantityTypeIdentifierOxygenSaturation") {
+      const v = normalizeOxygenSaturationPct(valueRaw, unit);
+      if (v === null) return false;
+      addWeightedAvg(grid.spo2Sum, grid.spo2W, grid, v, s, e);
+      return true;
+    }
+
+    if (type === "HKQuantityTypeIdentifierRespiratoryRate") {
+      const v = Number(valueRaw);
+      if (!Number.isFinite(v)) return false;
+      addWeightedAvg(grid.rrSum, grid.rrW, grid, v, s, e);
+      return true;
+    }
+
+    if (
+      type === "HKQuantityTypeIdentifierAppleSleepingWristTemperature" ||
+      type === "HKQuantityTypeIdentifierWristTemperature" ||
+      type === "HKQuantityTypeIdentifierBodyTemperature"
+    ) {
+      const v = Number(valueRaw);
+      if (!Number.isFinite(v)) return false;
+      addWeightedAvg(grid.tempSum, grid.tempW, grid, v, s, e);
+      return true;
+    }
+
+    if (type === "HKQuantityTypeIdentifierCyclingPower" || type === "HKQuantityTypeIdentifierRunningPower") {
+      const v = Number(valueRaw);
+      if (!Number.isFinite(v)) return false;
+      addWeightedAvg(grid.powerSum, grid.powerW, grid, v, s, e);
+      return true;
+    }
+
+    if (type === "HKQuantityTypeIdentifierStepCount") {
+      const v = Number(valueRaw);
+      if (!Number.isFinite(v)) return false;
+      addAdditiveSum(grid.stepsSum, grid, v, s, e);
+      return true;
+    }
+
+    if (type === "HKQuantityTypeIdentifierActiveEnergyBurned") {
+      const kcal = normalizeEnergyKcal(valueRaw, unit);
+      if (kcal === null) return false;
+      addAdditiveSum(grid.activeEnergySum, grid, kcal, s, e);
+      return true;
+    }
+
+    return false;
   }
 
   function forEachOverlappingEpoch(grid, intervalStartMs, intervalEndMs, fn) {
@@ -909,22 +1172,6 @@
 
     const grid = buildAppleHealthEpochGrid(startMs, endMs, epochMinutes);
 
-    const WANT_TYPES = new Set([
-      "HKQuantityTypeIdentifierHeartRate",
-      "HKQuantityTypeIdentifierHeartRateVariabilitySDNN",
-      "HKQuantityTypeIdentifierStepCount",
-      "HKQuantityTypeIdentifierActiveEnergyBurned",
-      "HKQuantityTypeIdentifierOxygenSaturation",
-      "HKQuantityTypeIdentifierRespiratoryRate",
-      "HKCategoryTypeIdentifierSleepAnalysis",
-      "HKCategoryTypeIdentifierMindfulSession",
-      "HKQuantityTypeIdentifierAppleSleepingWristTemperature",
-      "HKQuantityTypeIdentifierWristTemperature",
-      "HKQuantityTypeIdentifierBodyTemperature",
-      "HKQuantityTypeIdentifierCyclingPower",
-      "HKQuantityTypeIdentifierRunningPower",
-    ]);
-
     let bytesRead = 0;
     let recordSeen = 0;
     let recordUsed = 0;
@@ -939,7 +1186,7 @@
     const handleRecord = (tag) => {
       recordSeen++;
       const type = extractXmlAttr(tag, "type");
-      if (!type || !WANT_TYPES.has(type)) return;
+      if (!type || !APPLE_HEALTH_WANT_TYPES.has(type)) return;
 
       const start = parseAppleHealthDateMs(extractXmlAttr(tag, "startDate"));
       const end = parseAppleHealthDateMs(extractXmlAttr(tag, "endDate"));
@@ -948,95 +1195,18 @@
       const e = Math.max(start, end);
       if (e <= grid.startMs || s >= grid.endMs) return;
 
-      if (type === "HKCategoryTypeIdentifierSleepAnalysis") {
-        const stage = sleepStageFromAppleHealth(extractXmlAttr(tag, "value"));
-        if (stage) {
-          addSleepStage(grid, stage, s, e);
-          recordUsed++;
-        }
-        return;
-      }
-
-      if (type === "HKCategoryTypeIdentifierMindfulSession") {
-        if (!includeMindful) return;
-        setBooleanFlag(grid.mindful, grid, s, e);
-        recordUsed++;
-        return;
-      }
-
-      const valueRaw = extractXmlAttr(tag, "value");
-      const unit = extractXmlAttr(tag, "unit");
-
-      if (type === "HKQuantityTypeIdentifierHeartRate") {
-        const v = Number(valueRaw);
-        if (Number.isFinite(v)) {
-          addWeightedAvg(grid.hrSum, grid.hrW, grid, v, s, e);
-          recordUsed++;
-        }
-        return;
-      }
-
-      if (type === "HKQuantityTypeIdentifierHeartRateVariabilitySDNN") {
-        const v = Number(valueRaw);
-        if (Number.isFinite(v)) {
-          addWeightedAvg(grid.hrvSum, grid.hrvW, grid, v, s, e);
-          recordUsed++;
-        }
-        return;
-      }
-
-      if (type === "HKQuantityTypeIdentifierOxygenSaturation") {
-        const v = normalizeOxygenSaturationPct(valueRaw, unit);
-        if (v !== null) {
-          addWeightedAvg(grid.spo2Sum, grid.spo2W, grid, v, s, e);
-          recordUsed++;
-        }
-        return;
-      }
-
-      if (type === "HKQuantityTypeIdentifierRespiratoryRate") {
-        const v = Number(valueRaw);
-        if (Number.isFinite(v)) {
-          addWeightedAvg(grid.rrSum, grid.rrW, grid, v, s, e);
-          recordUsed++;
-        }
-        return;
-      }
-
-      if (type === "HKQuantityTypeIdentifierAppleSleepingWristTemperature" || type === "HKQuantityTypeIdentifierWristTemperature" || type === "HKQuantityTypeIdentifierBodyTemperature") {
-        const v = Number(valueRaw);
-        if (Number.isFinite(v)) {
-          addWeightedAvg(grid.tempSum, grid.tempW, grid, v, s, e);
-          recordUsed++;
-        }
-        return;
-      }
-
-      if (type === "HKQuantityTypeIdentifierCyclingPower" || type === "HKQuantityTypeIdentifierRunningPower") {
-        const v = Number(valueRaw);
-        if (Number.isFinite(v)) {
-          addWeightedAvg(grid.powerSum, grid.powerW, grid, v, s, e);
-          recordUsed++;
-        }
-        return;
-      }
-
-      if (type === "HKQuantityTypeIdentifierStepCount") {
-        const v = Number(valueRaw);
-        if (Number.isFinite(v)) {
-          addAdditiveSum(grid.stepsSum, grid, v, s, e);
-          recordUsed++;
-        }
-        return;
-      }
-
-      if (type === "HKQuantityTypeIdentifierActiveEnergyBurned") {
-        const kcal = normalizeEnergyKcal(valueRaw, unit);
-        if (kcal !== null) {
-          addAdditiveSum(grid.activeEnergySum, grid, kcal, s, e);
-          recordUsed++;
-        }
-      }
+      const used = applyAppleHealthRecordToGrid(
+        grid,
+        {
+          type,
+          startMs: s,
+          endMs: e,
+          value: extractXmlAttr(tag, "value"),
+          unit: extractXmlAttr(tag, "unit"),
+        },
+        { includeMindful },
+      );
+      if (used) recordUsed++;
     };
 
     const handleWorkout = (tag) => {
@@ -1123,10 +1293,169 @@
     return { epochs, stats: { bytesRead, recordSeen, recordUsed, workoutSeen, epochCount: grid.count } };
   }
 
+  async function parseAppleHealthCsvFiles(files, options) {
+    const { startMs, endMs, epochMinutes, includeWorkouts, includeMindful, onProgress } = options || {};
+    const fileList = Array.from(files || []);
+    if (fileList.length === 0) throw new Error("缺少 CSV 文件。");
+    if (!Number.isFinite(startMs) || !Number.isFinite(endMs) || endMs <= startMs) throw new Error("请选择有效的时间范围。");
+
+    const grid = buildAppleHealthEpochGrid(startMs, endMs, epochMinutes);
+
+    let bytesRead = 0;
+    let recordSeen = 0;
+    let recordUsed = 0;
+    let workoutSeen = 0;
+
+    const totalBytes = fileList.reduce((sum, f) => sum + (Number.isFinite(f.size) ? f.size : 0), 0) || null;
+
+    const progressTick = (extra) => {
+      if (typeof onProgress !== "function") return;
+      onProgress({ bytesRead, totalBytes, recordSeen, recordUsed, workoutSeen, ...extra });
+    };
+
+    const START_COLS = ["startdate", "starttime", "startdatetime", "start", "begindate", "begintime", "begin"];
+    const END_COLS = ["enddate", "endtime", "enddatetime", "end", "finishdate", "finishtime", "finish", "stopdate", "stoptime", "stop"];
+    const DATE_COLS = ["date", "datetime", "time", "timestamp"];
+    const VALUE_COLS = ["value", "val", "quantity"];
+    const UNIT_COLS = ["unit", "units"];
+    const TYPE_COLS = ["type", "identifier", "datatype", "recordtype"];
+    const WORKOUT_TYPE_COLS = ["workoutactivitytype", "activitytype", "workouttype"];
+
+    const chunkBytes = 1024 * 1024;
+    let lastProgressAt = 0;
+
+    for (let fileIndex = 0; fileIndex < fileList.length; fileIndex++) {
+      const file = fileList[fileIndex];
+      const fileName = file && file.name ? String(file.name) : `file${fileIndex + 1}.csv`;
+
+      if (await isZipFile(file)) throw new Error(`检测到 ZIP：请先解压后选择 CSV 文件（${fileName}）。`);
+
+      const fileInferredType = inferAppleHealthRecordTypeFromHint(fileName);
+      progressTick({ fileIndex: fileIndex + 1, fileCount: fileList.length, fileName });
+
+      const decoder = new TextDecoder("utf-8");
+      let carry = "";
+      let delimiter = null;
+      let headerFields = null;
+      let headerIndex = null;
+      let col = null;
+      let isWorkoutFile = /workout/i.test(fileName);
+
+      const handleHeaderLine = (line) => {
+        const trimmed = String(line || "").trim();
+        if (!trimmed) return true;
+
+        const sep = trimmed.match(/^sep\s*=\s*(.)\s*$/i);
+        if (sep) {
+          delimiter = sep[1];
+          return true;
+        }
+
+        delimiter = delimiter || guessCsvDelimiter(trimmed);
+        headerFields = parseCsvLine(trimmed.replace(/^\ufeff/, ""), delimiter);
+        headerIndex = buildCsvHeaderIndex(headerFields);
+
+        col = {
+          typeIdx: findCsvColumn(headerIndex, TYPE_COLS),
+          startIdx: findCsvColumn(headerIndex, START_COLS),
+          endIdx: findCsvColumn(headerIndex, END_COLS),
+          dateIdx: findCsvColumn(headerIndex, DATE_COLS),
+          valueIdx: findCsvColumn(headerIndex, VALUE_COLS),
+          unitIdx: findCsvColumn(headerIndex, UNIT_COLS),
+          workoutTypeIdx: findCsvColumn(headerIndex, WORKOUT_TYPE_COLS),
+        };
+        if (col.workoutTypeIdx !== -1) isWorkoutFile = true;
+        return false;
+      };
+
+      const handleDataLine = (line) => {
+        const s = String(line || "");
+        if (!s.trim()) return;
+        if (!headerFields || !headerIndex || !col) return;
+
+        const fields = parseCsvLine(s, delimiter);
+        if (fields.length === 0) return;
+
+        // Skip accidental repeated headers inside the file.
+        if (fields.length === headerFields.length && normalizeCsvHeaderName(fields[0]) === normalizeCsvHeaderName(headerFields[0])) return;
+
+        const startStr = col.startIdx !== -1 ? fields[col.startIdx] : col.dateIdx !== -1 ? fields[col.dateIdx] : null;
+        const endStr = col.endIdx !== -1 ? fields[col.endIdx] : null;
+        const start = parseAppleHealthDateMs(startStr);
+        if (start === null) return;
+        const end = endStr ? parseAppleHealthDateMs(endStr) : start;
+        if (end === null) return;
+
+        const sMs = Math.min(start, end);
+        const eMs = Math.max(start, end);
+        if (eMs <= grid.startMs || sMs >= grid.endMs) return;
+
+        if (isWorkoutFile) {
+          workoutSeen++;
+          if (!includeWorkouts) return;
+          const workoutType = col.workoutTypeIdx !== -1 ? fields[col.workoutTypeIdx] : null;
+          setBooleanFlag(grid.workout, grid, sMs, eMs, (idx) => {
+            if (workoutType && !grid.workoutType[idx]) grid.workoutType[idx] = workoutType;
+          });
+          return;
+        }
+
+        recordSeen++;
+        const typeRaw = col.typeIdx !== -1 ? fields[col.typeIdx] : null;
+        const type = resolveAppleHealthRecordType(typeRaw, fileInferredType, fileName);
+        if (!type || !APPLE_HEALTH_WANT_TYPES.has(type)) return;
+
+        const value = col.valueIdx !== -1 ? fields[col.valueIdx] : null;
+        const unit = col.unitIdx !== -1 ? fields[col.unitIdx] : null;
+
+        const used = applyAppleHealthRecordToGrid(grid, { type, startMs: sMs, endMs: eMs, value, unit }, { includeMindful });
+        if (used) recordUsed++;
+      };
+
+      const size = Number.isFinite(file.size) ? file.size : 0;
+      for (let offset = 0; offset < size; offset += chunkBytes) {
+        const buf = await file.slice(offset, offset + chunkBytes).arrayBuffer();
+        bytesRead += buf.byteLength;
+        carry += decoder.decode(buf, { stream: true });
+
+        while (true) {
+          const nl = carry.indexOf("\n");
+          if (nl === -1) break;
+          let line = carry.slice(0, nl);
+          carry = carry.slice(nl + 1);
+          if (line.endsWith("\r")) line = line.slice(0, -1);
+
+          if (!headerFields) {
+            handleHeaderLine(line);
+            continue;
+          }
+          handleDataLine(line);
+        }
+
+        if (bytesRead - lastProgressAt >= 2 * 1024 * 1024) {
+          lastProgressAt = bytesRead;
+          progressTick({ fileIndex: fileIndex + 1, fileCount: fileList.length, fileName });
+        }
+      }
+
+      carry += decoder.decode();
+      if (carry) {
+        const tail = carry.replace(/\r$/, "");
+        if (!headerFields) handleHeaderLine(tail);
+        else handleDataLine(tail);
+      }
+
+      progressTick({ fileIndex: fileIndex + 1, fileCount: fileList.length, fileName });
+    }
+
+    const epochs = finalizeAppleHealthEpochs(grid);
+    return { epochs, stats: { bytesRead, recordSeen, recordUsed, workoutSeen, epochCount: grid.count, fileCount: fileList.length } };
+  }
+
   async function importAppleHealthToJson(runAfterImport) {
-    const file = $("appleHealthFile")?.files?.[0] ?? null;
-    if (!file) {
-      showError($("appleError"), "请选择 Apple Health 导出的 export.xml（或先解压 export.zip 再选 export.xml）。");
+    const files = Array.from($("appleHealthFile")?.files ?? []);
+    if (files.length === 0) {
+      showError($("appleError"), "请选择 Apple Health 的 export.xml 或 HealthExportCSV 导出的 CSV 文件（可多选）。");
       return;
     }
 
@@ -1147,21 +1476,50 @@
       $("appleImportToJson").disabled = true;
       $("appleImportAndRun").disabled = true;
 
-      const onProgress = ({ bytesRead, totalBytes, recordSeen, recordUsed, workoutSeen }) => {
+      const onProgress = ({ bytesRead, totalBytes, recordSeen, recordUsed, workoutSeen, fileIndex, fileCount, fileName }) => {
         const pctNum = totalBytes ? (bytesRead / totalBytes) * 100 : null;
         const pct = pctNum !== null ? `${Math.round(pctNum)}%` : "-";
         if (pctNum !== null) setAppleProgress(pctNum);
-        $("appleStatus").textContent = `解析中… ${pct} (${formatBytes(bytesRead)} / ${totalBytes ? formatBytes(totalBytes) : "?"}) · Record ${recordUsed}/${recordSeen} · Workout ${workoutSeen}`;
+        const filePart =
+          Number.isFinite(fileIndex) && Number.isFinite(fileCount) && fileCount > 0
+            ? ` · File ${fileIndex}/${fileCount}${fileName ? ` (${fileName})` : ""}`
+            : "";
+        $("appleStatus").textContent = `解析中… ${pct} (${formatBytes(bytesRead)} / ${totalBytes ? formatBytes(totalBytes) : "?"}) · Record ${recordUsed}/${recordSeen} · Workout ${workoutSeen}${filePart}`;
       };
 
-      const { epochs, stats } = await parseAppleHealthExport(file, {
-        startMs,
-        endMs,
-        epochMinutes,
-        includeWorkouts,
-        includeMindful,
-        onProgress,
-      });
+      const isXml = (f) => {
+        const name = String(f?.name || "").toLowerCase();
+        const type = String(f?.type || "").toLowerCase();
+        return name.endsWith(".xml") || type.includes("xml");
+      };
+      const isCsv = (f) => {
+        const name = String(f?.name || "").toLowerCase();
+        const type = String(f?.type || "").toLowerCase();
+        return name.endsWith(".csv") || type.includes("csv");
+      };
+      const isZip = (f) => {
+        const name = String(f?.name || "").toLowerCase();
+        const type = String(f?.type || "").toLowerCase();
+        return name.endsWith(".zip") || type.includes("zip");
+      };
+
+      const xmlFiles = files.filter(isXml);
+      const csvFiles = files.filter(isCsv);
+      const zipFiles = files.filter(isZip);
+
+      if (zipFiles.length > 0) throw new Error("检测到 ZIP：请先解压后再选择其中的 export.xml / CSV 文件。");
+      if (xmlFiles.length > 0 && csvFiles.length > 0) throw new Error("请只选择 export.xml 或一组 CSV 文件，不要混选。");
+      if (xmlFiles.length > 1) throw new Error("export.xml 只能选择 1 个文件。");
+
+      const parsed =
+        xmlFiles.length === 1
+          ? await parseAppleHealthExport(xmlFiles[0], { startMs, endMs, epochMinutes, includeWorkouts, includeMindful, onProgress })
+          : csvFiles.length > 0
+            ? await parseAppleHealthCsvFiles(csvFiles, { startMs, endMs, epochMinutes, includeWorkouts, includeMindful, onProgress })
+            : null;
+
+      if (!parsed) throw new Error("未识别的文件类型：请选择 export.xml 或 .csv 文件。");
+      const { epochs, stats } = parsed;
 
       const initialBB = clamp(numOrNull($("initialBB").value) ?? 70, 0, 100);
       const baselines = readBaselinesFromUI();
@@ -1175,7 +1533,8 @@
       $("jsonInput").value = JSON.stringify(cfg, null, 2);
       showError($("jsonError"), null);
       setAppleProgress(100);
-      $("appleStatus").textContent = `完成：epochs=${stats.epochCount} · RecordUsed=${stats.recordUsed}/${stats.recordSeen} · Workout=${stats.workoutSeen} · 读取=${formatBytes(stats.bytesRead)}`;
+      const fileInfo = stats.fileCount ? ` · Files=${stats.fileCount}` : "";
+      $("appleStatus").textContent = `完成：epochs=${stats.epochCount}${fileInfo} · RecordUsed=${stats.recordUsed}/${stats.recordSeen} · Workout=${stats.workoutSeen} · 读取=${formatBytes(stats.bytesRead)}`;
 
       setActiveTab("json");
       if (runAfterImport) computeAndRender(cfg);

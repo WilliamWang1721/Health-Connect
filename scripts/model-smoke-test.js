@@ -48,6 +48,41 @@ assert(workout[0].drainComponents.loadPerHour > 0);
 assert.notStrictEqual(workout[1].context.kind, "WORKOUT");
 assert(workout[1].drainComponents.loadPerHour <= workout[0].drainComponents.loadPerHour);
 
+(() => {
+  const epochMinutes = 5;
+  const startMs = Date.UTC(2025, 0, 1, 3, 0, 0);
+  const msPerEpoch = epochMinutes * 60000;
+  const mk = (i, patch) => ({ timestampMs: startMs + i * msPerEpoch, ...patch });
+
+  const baseCfg = {
+    epochMinutes,
+    initialBB: 70,
+    baselines: {
+      rhrBpm: 60,
+      hrvSdnnMs: 55,
+      spo2Pct: 97,
+      respRateBrpm: 14,
+      wristTempC: 36.55,
+      ftpW: 220,
+      hrMaxBpm: 190,
+    },
+    epochs: [
+      mk(0, {
+        workout: true,
+        hrBpm: 138,
+        steps: 525,
+        activeEnergyKcal: 70,
+        powerW: 250,
+      }),
+    ],
+  };
+
+  const lowW = BodyBatteryModel.computeSeries({ ...baseCfg, params: { workoutHrWeight: 1.0 } }).series[0];
+  const highW = BodyBatteryModel.computeSeries({ ...baseCfg, params: { workoutHrWeight: 1.5 } }).series[0];
+
+  assert(highW.drainComponents.loadPerHour > lowW.drainComponents.loadPerHour * 1.15);
+})();
+
 // SleepCharge should include multiple sleep segments within the same main sleep session.
 (() => {
   const epochMinutes = 5;
@@ -118,6 +153,75 @@ assert(workout[1].drainComponents.loadPerHour <= workout[0].drainComponents.load
 
   assert(miss !== null && hasHr !== null);
   assert(miss < hasHr * 0.8, `Expected missing-vitals sleepCharge < 0.8x. got miss=${miss}, hasHr=${hasHr}`);
+})();
+
+(() => {
+  const epochMinutes = 5;
+  const startMs = Date.UTC(2025, 0, 3, 0, 0, 0);
+  const msPerEpoch = epochMinutes * 60000;
+  const mk = (i, patch) => ({ timestampMs: startMs + i * msPerEpoch, ...patch });
+
+  const mkSleepCfg = ({ sleepStage, hrBpm, hrvSdnnMs, spo2Pct, respRateBrpm }) => ({
+    epochMinutes,
+    initialBB: 60,
+    baselines: {
+      rhrBpm: 60,
+      hrvSdnnMs: 55,
+      spo2Pct: 97,
+      respRateBrpm: 14,
+      wristTempC: 36.55,
+    },
+    epochs: Array.from({ length: 96 }, (_, i) =>
+      mk(i, {
+        sleepStage,
+        hrBpm,
+        hrvSdnnMs,
+        spo2Pct,
+        respRateBrpm,
+        steps: 0,
+        activeEnergyKcal: 0,
+      }),
+    ),
+  });
+
+  const good = BodyBatteryModel.computeSeries(
+    mkSleepCfg({ sleepStage: "deep", hrBpm: 52, hrvSdnnMs: 80, spo2Pct: 98, respRateBrpm: 13 }),
+  ).summary.morningBB;
+
+  const bad = BodyBatteryModel.computeSeries(
+    mkSleepCfg({ sleepStage: "inBed", hrBpm: 68, hrvSdnnMs: 30, spo2Pct: 93, respRateBrpm: 18 }),
+  ).summary.morningBB;
+
+  assert(good !== null && bad !== null);
+  assert(good - bad >= 20, `Expected sleep quality to materially impact morningBB. good=${good}, bad=${bad}`);
+})();
+
+(() => {
+  const epochMinutes = 5;
+  const startMs = Date.UTC(2025, 0, 4, 0, 0, 0);
+  const msPerEpoch = epochMinutes * 60000;
+  const mk = (i, patch) => ({ timestampMs: startMs + i * msPerEpoch, ...patch });
+
+  const mkCfg = (hrvSdnnMs) => ({
+    epochMinutes,
+    initialBB: 60,
+    baselines: {
+      rhrBpm: 60,
+      hrvSdnnMs: 55,
+      spo2Pct: 97,
+      respRateBrpm: 14,
+      wristTempC: 36.55,
+    },
+    epochs: Array.from({ length: 72 }, (_, i) =>
+      mk(i, { sleepStage: "core", hrBpm: 55, hrvSdnnMs, spo2Pct: 97, respRateBrpm: 14, steps: 0, activeEnergyKcal: 0 }),
+    ),
+  });
+
+  const high = BodyBatteryModel.computeSeries(mkCfg(80)).summary.morningBB;
+  const low = BodyBatteryModel.computeSeries(mkCfg(30)).summary.morningBB;
+
+  assert(high !== null && low !== null);
+  assert(high - low >= 12, `Expected higher HRV to produce higher morningBB. high=${high}, low=${low}`);
 })();
 
 console.log("model-smoke-test: OK");

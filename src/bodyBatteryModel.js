@@ -9,7 +9,7 @@
 })(typeof self !== "undefined" ? self : this, function () {
   "use strict";
 
-  const VERSION = "0.1.0";
+  const VERSION = "0.1.1";
 
   function clamp(value, min, max) {
     if (!Number.isFinite(value)) return min;
@@ -220,11 +220,29 @@
       imputeSpo2QualityAtFresh: 0.4,
       imputeRrQualityAtFresh: 0.4,
       imputeTempQualityAtFresh: 0.4,
-      baseSleepChargePerHour: 9,
+      baseSleepChargePerHour: 10.5,
       baseRestChargePerHour: 2,
       baseMindChargePerHour: 4,
       loadDrainWorkoutMaxPerHour: 35,
+      workoutHrWeight: 1.2,
+      loadDrainHighMaxPerHour: 26,
       loadDrainActiveMaxPerHour: 18,
+      loadDrainLightMaxPerHour: 12,
+      loadDrainInactiveMaxPerHour: 6,
+      // Auto state engine thresholds (0-1)
+      stateLightMin01: 0.15,
+      stateActiveMin01: 0.4,
+      stateHighMin01: 0.7,
+      // Rest vs inactive (sub-state under INACTIVE)
+      restStateMinScore01: 0.55,
+      restStateMaxMove01: 0.12,
+      restStateMaxStepsPerMin: 2,
+      restStateMaxEnergyPerMin: 0.8,
+      // Low-activity recovery gate (rest/inactive)
+      restChargeMinPotential01: 0.2,
+      restChargeStressIndexMax: 1.8,
+      restChargeAnomIndexMax: 1.2,
+      restChargeGainExponent: 1.25,
       stressDrainPerIndexPerHour: 4,
       stressDrainMaxPerHour: 14,
       anomDrainPerIndexPerHour: 2.5,
@@ -346,7 +364,7 @@
       prevTs = ts ?? prevTs;
 
       const dtMinutes = dtHours * 60;
-      const context0 = e.context ? { ...(e.context || {}) } : classifyContext(e, baselines, epochMinutes);
+      const context0 = e.context ? { ...(e.context || {}) } : classifyContext(e, baselines, epochMinutes, params);
       timeline.push({ tsMs: ts, dtMinutes, dtHours, context0 });
     }
     return timeline;
@@ -381,7 +399,7 @@
       const ts = timeline[i]?.tsMs ?? null;
       if (ts !== null && ts !== undefined && Number.isFinite(ts)) current.endTsMs = ts;
 
-      if (kind === "WORKOUT" || kind === "ACTIVE" || kind === "LIGHT_ACTIVITY") {
+      if (kind === "WORKOUT" || kind === "HIGH_ACTIVITY" || kind === "ACTIVE" || kind === "LIGHT_ACTIVITY") {
         const dtMinutes = Number(timeline[i]?.dtMinutes ?? 0) || 0;
         const intensity = movementIntensity01FromEpoch(epochs[i], dtMinutes, baselines);
         current.intensity01Sum += intensity * dtMinutes;
@@ -590,7 +608,101 @@
     return (value - base) / scale;
   }
 
-  function classifyContext(epoch, baselines, epochMinutes) {
+  function computeActivityFeaturesForStateEngine(epoch, baselines, dtMinutes) {
+    const dtMin = Number.isFinite(dtMinutes) && dtMinutes > 0 ? dtMinutes : 5;
+
+    const steps = toNumberOrNull(epoch.steps) ?? 0;
+    const hr = toNumberOrNull(epoch.hrBpm ?? epoch.hr);
+    const hrv = toNumberOrNull(epoch.hrvSdnnMs ?? epoch.hrvMs ?? epoch.hrv);
+    const activeEnergy = toNumberOrNull(epoch.activeEnergyKcal ?? epoch.activeEnergy ?? epoch.energyKcal);
+    const power = toNumberOrNull(epoch.powerW ?? epoch.power);
+
+    const stepsPerMin = steps / dtMin;
+    const energyPerMin = activeEnergy === null ? 0 : activeEnergy / dtMin;
+
+    const ftp = Number(baselines?.ftpW ?? 220);
+    const rhr = Number(baselines?.rhrBpm ?? 60);
+    const hrMax = Number(baselines?.hrMaxBpm ?? 190);
+
+    const stepsIdx = clamp(stepsPerMin / 150, 0, 1);
+    const energyIdx = clamp(energyPerMin / 20, 0, 1);
+    const powerIdx =
+      power === null || !Number.isFinite(ftp) || ftp <= 0 ? 0 : clamp(power / ftp, 0, 1.6) / 1.6;
+
+    const movementIntensity01 = clamp(Math.max(stepsIdx, energyIdx, powerIdx), 0, 1);
+    const hasActivitySignal = stepsPerMin >= 8 || energyPerMin >= 1.2 || (power !== null && power >= 60);
+
+    const hrIdx =
+      hr === null || !Number.isFinite(rhr) || !Number.isFinite(hrMax) || hrMax <= rhr
+        ? 0
+        : clamp((hr - rhr) / (hrMax - rhr), 0, 1);
+
+    const zHrv = hrv === null ? null : normalizeZ(hrv, baselines?.hrvSdnnMs, baselines?.hrvScaleMs);
+
+    return {
+      stepsPerMin,
+      energyPerMin,
+      power,
+      movementIntensity01,
+      hasActivitySignal,
+      hr,
+      hrIdx,
+      hrv,
+      zHrv,
+      rhr,
+    };
+  }
+
+  function inferActivityState(engineFeatures, params) {
+    const move01 = clamp(Number(engineFeatures?.movementIntensity01 ?? 0), 0, 1);
+    const hrIdx = clamp(Number(engineFeatures?.hrIdx ?? 0), 0, 1);
+    const hasActivitySignal = Boolean(engineFeatures?.hasActivitySignal);
+
+    // Avoid mistaking stress for activity: only let HR up-weight intensity when we see movement/energy/power evidence.
+    const effort01 = hasActivitySignal ? Math.max(move01, 0.65 * hrIdx) : move01;
+
+    const light0 = clamp(Number(params?.stateLightMin01 ?? 0.15), 0, 1);
+    const active0 = clamp(Number(params?.stateActiveMin01 ?? 0.4), 0, 1);
+    const high0 = clamp(Number(params?.stateHighMin01 ?? 0.7), 0, 1);
+
+    const lightMin = Math.min(light0, active0, high0);
+    const highMin = Math.max(light0, active0, high0);
+    const activeMin = clamp(light0 + active0 + high0 - lightMin - highMin, lightMin, highMin);
+
+    if (effort01 >= highMin) return { state: "HIGH_ACTIVITY", effort01 };
+    if (effort01 >= activeMin) return { state: "ACTIVE", effort01 };
+    if (effort01 >= lightMin) return { state: "LIGHT_ACTIVITY", effort01 };
+    return { state: "INACTIVE", effort01 };
+  }
+
+  function inferRestSubState(engineFeatures, params) {
+    const hr = toNumberOrNull(engineFeatures?.hr);
+    const rhr = Number(engineFeatures?.rhr ?? 60);
+    const zHrv = engineFeatures?.zHrv ?? null;
+
+    const move01 = clamp(Number(engineFeatures?.movementIntensity01 ?? 0), 0, 1);
+    const stepsPerMin = Math.max(0, Number(engineFeatures?.stepsPerMin ?? 0) || 0);
+    const energyPerMin = Math.max(0, Number(engineFeatures?.energyPerMin ?? 0) || 0);
+
+    const maxMove01 = clamp(Number(params?.restStateMaxMove01 ?? 0.12), 0, 1);
+    const maxStepsPerMin = clamp(Number(params?.restStateMaxStepsPerMin ?? 2), 0, 50);
+    const maxEnergyPerMin = clamp(Number(params?.restStateMaxEnergyPerMin ?? 0.8), 0, 10);
+    const minScore01 = clamp(Number(params?.restStateMinScore01 ?? 0.55), 0, 1);
+
+    if (hr === null) return { restKind: "INACTIVE", score01: 0 };
+    if (move01 > maxMove01 || stepsPerMin > maxStepsPerMin || energyPerMin > maxEnergyPerMin) {
+      return { restKind: "INACTIVE", score01: 0 };
+    }
+
+    const hrRelax01 = !Number.isFinite(rhr) ? 0 : clamp((rhr + 12 - hr) / 12, 0, 1);
+    const still01 = clamp((maxMove01 - move01) / Math.max(1e-6, maxMove01), 0, 1);
+    const hrvBonus01 = zHrv === null ? 0 : clamp(zHrv / 1.5, 0, 1);
+
+    const score01 = clamp(0.55 * hrRelax01 + 0.25 * still01 + 0.2 * hrvBonus01, 0, 1);
+    return { restKind: score01 >= minScore01 ? "REST" : "INACTIVE", score01 };
+  }
+
+  function classifyContext(epoch, baselines, epochMinutes, params) {
     const dtMin = Number.isFinite(epochMinutes) && epochMinutes > 0 ? epochMinutes : 5;
 
     const sleepStageRaw = epoch.sleepStage ?? epoch.sleep ?? null;
@@ -605,21 +717,16 @@
     const workout = Boolean(epoch.workout ?? epoch.isWorkout);
     if (workout) return { kind: "WORKOUT", workoutType: epoch.workoutType ?? null };
 
-    const steps = toNumberOrNull(epoch.steps) ?? 0;
-    const hr = toNumberOrNull(epoch.hrBpm ?? epoch.hr);
-    const power = toNumberOrNull(epoch.powerW ?? epoch.power);
-    const activeEnergy = toNumberOrNull(epoch.activeEnergyKcal ?? epoch.activeEnergy ?? epoch.energyKcal);
+    const features = computeActivityFeaturesForStateEngine(epoch, baselines, dtMin);
+    const inferred = inferActivityState(features, params);
 
-    const stepsPerMin = steps / dtMin;
-    const hasActivitySignal = stepsPerMin >= 8 || (activeEnergy !== null && activeEnergy / dtMin >= 1.2) || (power !== null && power >= 60);
+    if (inferred.state === "HIGH_ACTIVITY") return { kind: "HIGH_ACTIVITY", engine: { ...features, ...inferred } };
+    if (inferred.state === "ACTIVE") return { kind: "ACTIVE", engine: { ...features, ...inferred } };
+    if (inferred.state === "LIGHT_ACTIVITY") return { kind: "LIGHT_ACTIVITY", engine: { ...features, ...inferred } };
 
-    const rhr = baselines?.rhrBpm ?? 60;
-    const isRestLike = !hasActivitySignal && hr !== null && hr <= rhr + 12;
-    if (isRestLike) return { kind: "AWAKE_REST" };
-
-    if (!hasActivitySignal) return { kind: "AWAKE" };
-    if (stepsPerMin < 40 && (power === null || power < 120)) return { kind: "LIGHT_ACTIVITY" };
-    return { kind: "ACTIVE" };
+    const rest = inferRestSubState(features, params);
+    if (rest.restKind === "REST") return { kind: "AWAKE_REST", engine: { ...features, ...inferred, ...rest } };
+    return { kind: "AWAKE", engine: { ...features, ...inferred, ...rest } };
   }
 
   function scoreQuality01(value, minOk, maxOk) {
@@ -692,6 +799,11 @@
           charge: { sleep: 0, rest: 0.9, mind: 0.1 },
           drain: { load: 0.1, stress: 0.9, anom: 0 },
         };
+      case "HIGH_ACTIVITY":
+        return {
+          charge: { sleep: 0, rest: 0.02, mind: 0 },
+          drain: { load: 0.78, stress: 0.22, anom: 0 },
+        };
       case "ACTIVE":
         return {
           charge: { sleep: 0, rest: 0.05, mind: 0 },
@@ -750,11 +862,11 @@
   function sleepStageFactor(sleepStage) {
     if (!sleepStage) return 1;
     const s = String(sleepStage).toLowerCase();
-    if (s.includes("deep")) return 1.2;
+    if (s.includes("deep")) return 1.35;
     if (s.includes("core") || s.includes("light")) return 1;
-    if (s.includes("rem")) return 0.9;
-    if (s.includes("awake")) return 0.25;
-    if (s.includes("inbed") || s.includes("in_bed")) return 0.35;
+    if (s.includes("rem")) return 0.85;
+    if (s.includes("awake")) return 0.15;
+    if (s.includes("inbed") || s.includes("in_bed")) return 0.25;
     return 1;
   }
 
@@ -795,7 +907,10 @@
 
     // Avoid double-counting: elevated HR without steps/energy/power is treated as "stress", not "mechanical load".
     let intensityForLoad = 0;
-    if (context.kind === "WORKOUT") intensityForLoad = clamp(Math.max(movementIntensity, hrIdx), 0, 1);
+    if (context.kind === "WORKOUT") {
+      const hrW = clamp(Number(params.workoutHrWeight ?? 1.2), 0.5, 2);
+      intensityForLoad = clamp(Math.max(movementIntensity, hrW * hrIdx), 0, 1);
+    }
     else if (hasActivitySignal) intensityForLoad = clamp(Math.max(movementIntensity, 0.5 * hrIdx), 0, 1);
     else intensityForLoad = movementIntensity;
 
@@ -897,7 +1012,7 @@
     const stageFactor = context.kind === "SLEEP" ? sleepStageFactor(context.sleepStage) : 0;
 
     let autonomicFactor = 1;
-    if (zHrv !== null) autonomicFactor += 0.15 * clamp(zHrv, -3, 3);
+    if (zHrv !== null) autonomicFactor += 0.25 * clamp(zHrv, -3, 3);
     if (hr !== null && Number.isFinite(rhr)) autonomicFactor -= 0.1 * clamp((hr - rhr) / 5, 0, 5);
     autonomicFactor = clamp(autonomicFactor, 0.4, 1.6);
 
@@ -906,28 +1021,46 @@
     if (isSleep && tempOnsetBenefitIndex > 0) {
       sleepRecovery *= 1 + onsetBoost * tempOnsetBenefitIndex;
     }
+    const sleepQualityExp = 1.3;
     sleepRecovery = clamp(sleepRecovery, 0, 2.5);
+    if (isSleep && sleepRecovery > 0) sleepRecovery = clamp(Math.pow(sleepRecovery, sleepQualityExp), 0, 2.5);
 
-    let restRecovery = 0;
+    let restRecoveryRaw = 0;
     if (context.kind === "AWAKE_REST" || context.kind === "AWAKE" || context.kind === "POST_ACTIVITY_RECOVERY") {
       const hrRelax =
         hr === null || !Number.isFinite(rhr) ? 0.6 : clamp((rhr + 15 - hr) / 15, 0, 1);
       const stepRelax = clamp((10 - stepsPerMin) / 10, 0, 1);
-      const hrvBonus = zHrv === null ? 0 : clamp(zHrv / 2, 0, 0.6);
-      restRecovery = clamp(0.55 * hrRelax + 0.35 * stepRelax + 0.2 * hrvBonus, 0, 1.5);
+      const hrvBonus = zHrv === null ? 0 : clamp(zHrv / 2, 0, 0.9);
+      restRecoveryRaw = clamp(0.5 * hrRelax + 0.25 * stepRelax + 0.35 * hrvBonus, 0, 1.5);
     }
+    let restRecovery = restRecoveryRaw;
 
     let mindRecovery = 0;
     const mindful = Boolean(epoch.mindful ?? epoch.mindfulness ?? epoch.isMindful);
     if (mindful || context.kind === "MEDITATION") {
       const hrRelax =
         hr === null || !Number.isFinite(rhr) ? 0.6 : clamp((rhr + 18 - hr) / 18, 0, 1);
-      const hrvBonus = zHrv === null ? 0 : clamp(zHrv / 2, 0, 0.8);
-      mindRecovery = clamp(0.7 + 0.4 * hrRelax + 0.2 * hrvBonus, 0, 1.8);
+      const hrvBonus = zHrv === null ? 0 : clamp(zHrv / 2, 0, 1.0);
+      mindRecovery = clamp(0.65 + 0.35 * hrRelax + 0.35 * hrvBonus, 0, 1.8);
     }
 
-    const loadExponent = context.kind === "WORKOUT" ? 1.55 : 1.25;
-    const loadMax = context.kind === "WORKOUT" ? params.loadDrainWorkoutMaxPerHour : params.loadDrainActiveMaxPerHour;
+    const isWorkout = context.kind === "WORKOUT";
+    const isHigh = context.kind === "HIGH_ACTIVITY";
+    const isActive = context.kind === "ACTIVE";
+    const isLight = context.kind === "LIGHT_ACTIVITY";
+
+    const loadExponent = clamp(isWorkout ? 1.55 : isHigh ? 1.45 : isActive ? 1.25 : isLight ? 1.15 : 1.05, 1, 2);
+    const loadMaxRaw = isWorkout
+      ? params.loadDrainWorkoutMaxPerHour
+      : isHigh
+        ? params.loadDrainHighMaxPerHour
+        : isActive
+          ? params.loadDrainActiveMaxPerHour
+          : isLight
+            ? params.loadDrainLightMaxPerHour
+            : params.loadDrainInactiveMaxPerHour;
+    const loadMaxN = Number(loadMaxRaw);
+    const loadMax = Number.isFinite(loadMaxN) ? Math.max(0, loadMaxN) : 0;
     const loadRate = loadMax * Math.pow(intensityForLoad, loadExponent);
 
     const hrExcessExpected =
@@ -942,7 +1075,7 @@
       Number.isFinite(rhr)
         ? relu((hr - (rhr + 5)) / 5)
         : 0;
-    const stressIndex = clamp(0.8 * stressFromHrv + 0.4 * stressFromHr + 0.2 * restElev, 0, 5);
+    const stressIndex = clamp(1.1 * stressFromHrv + 0.35 * stressFromHr + 0.2 * restElev, 0, 5);
     const stressRate = clamp(
       params.stressDrainPerIndexPerHour * stressIndex,
       0,
@@ -954,6 +1087,23 @@
       0,
       params.anomDrainMaxPerHour,
     );
+
+    // Rest vs inactive: decide whether BB should "charge" during low activity, and how much.
+    // Goal: allow small recovery during true relaxation, but prevent BB rising while physiologically stressed.
+    let restDecision = null;
+    if (context.kind === "AWAKE_REST" || context.kind === "AWAKE") {
+      const potential01 = clamp(restRecoveryRaw / 1.2, 0, 1);
+      const minPotential01 = clamp(Number(params.restChargeMinPotential01 ?? 0.2), 0, 1);
+      const stressMax = clamp(Number(params.restChargeStressIndexMax ?? 1.8), 0, 5);
+      const anomMax = Math.max(0, Number(params.restChargeAnomIndexMax ?? 1.2));
+      const gainExp = clamp(Number(params.restChargeGainExponent ?? 1.25), 0.5, 3);
+
+      const allowCharge = potential01 >= minPotential01 && stressIndex <= stressMax && anomIndex <= anomMax;
+      const gainScale = allowCharge ? clamp(Math.pow(potential01, gainExp), 0, 1) : 0;
+
+      restRecovery = allowCharge ? restRecoveryRaw * gainScale : 0;
+      restDecision = { allowCharge, potential01, gainScale, stressIndex, anomIndex };
+    }
 
     const qLoad = clamp(Math.max(q.steps ?? 0, q.energy ?? 0, q.power ?? 0, q.hr ?? 0), 0, 1);
     const qStress = clamp(Math.max(q.hrv ?? 0, q.hr ?? 0), 0, 1);
@@ -988,6 +1138,7 @@
         restRecovery,
         mindRecovery,
         anomIndex,
+        restDecision,
         anomBreakdown: {
           spo2: spo2PenaltyEff,
           rr: rrPenaltyEff,
@@ -1293,7 +1444,7 @@
       const dtMinutes = Number.isFinite(Number(t.dtMinutes)) ? Number(t.dtMinutes) : dtHours * 60;
 
       const context0 =
-        t.context0 && typeof t.context0 === "object" ? t.context0 : classifyContext(e, baselines, params.epochMinutes);
+        t.context0 && typeof t.context0 === "object" ? t.context0 : classifyContext(e, baselines, params.epochMinutes, params);
 
       const qRaw = computeQuality(e, baselines);
 

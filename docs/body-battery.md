@@ -75,7 +75,7 @@ Apple Watch 的睡眠腕温属于 **外周皮肤温度（wrist skin temperature,
 为满足“活动结束后仍可能出现短暂恢复回升”的生理现象，本方案新增 **平静恢复（post-activity calm recovery）**：
 
 - 触发条件（需要满足“活动刚结束 + 恢复特征出现”）：
-  - **活动结束**：从 `WORKOUT/ACTIVE/LIGHT_ACTIVITY` 进入低活动 epoch，并处于恢复窗口（例如 90 分钟内）
+  - **活动结束**：从 `WORKOUT/HIGH_ACTIVITY/ACTIVE/LIGHT_ACTIVITY` 进入低活动 epoch，并处于恢复窗口（例如 90 分钟内）
   - **恢复特征**：心率下降（HR drop）、HRV 上升（若可得）、以及能量/步数消耗下降（kcal/steps drop）
 - 输出行为（受限、短暂、小幅度）：
   - 在满足条件的短窗口内，为 `Reserve(BB)` 增加一个小的额外充电项（保证“可回升但不跳变”）
@@ -90,7 +90,8 @@ Apple Watch 的睡眠腕温属于 **外周皮肤温度（wrist skin temperature,
 
 - `Reserve(t)`（主曲线 / 传统 BB）、`Comfort(t)`、`Fatigue(t)`
 - `Charge(t)`、`Drain(t)`、`Confidence(t)`
-- `Context(t)`：睡眠/训练/冥想/清醒静息/日常活动/运动后平静恢复（`POST_ACTIVITY_RECOVERY`）等
+- `Context(t)`：睡眠/训练/冥想/清醒静息/清醒非活动/轻活动/活动/高强度活动/运动后平静恢复（`POST_ACTIVITY_RECOVERY`）等
+  - 其中 `SLEEP/WORKOUT/MEDITATION` 等“系统明确记录状态”直接使用；其余由状态判断引擎基于 HR/HRV/steps/energy/power 自动推断（并在低活动下进一步判断是“休息充电”还是“非活动消耗”）
 
 ### 5.2 日级衍生指标（示例）
 

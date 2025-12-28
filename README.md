@@ -33,6 +33,7 @@ node server.js
 测试页新增「Apple Health 导入」Tab：
 
 - 选择 Apple Health 导出的 `export.xml`（如果拿到的是 `export.zip`，请先解压后再选 `export.xml`）
+- 或选择 HealthExportCSV 导出的多个 `*.csv` 文件（可多选；如为 ZIP 也需先解压）
 - 设置本地开始/结束时间
 - 点击「导入到 JSON」或「导入并计算 BB」
 
