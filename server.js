@@ -46,6 +46,7 @@ const server = http.createServer((req, res) => {
 </style>
 <h1>Workout Connect (local)</h1>
 <p>Open: <a href="/web/body-battery-test.html"><code>/web/body-battery-test.html</code></a></p>
+<p>Open: <a href="/web/body-battery-explainer.html"><code>/web/body-battery-explainer.html</code></a></p>
 `;
     res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
     res.end(html);
@@ -79,4 +80,3 @@ server.listen(PORT, "127.0.0.1", () => {
   // eslint-disable-next-line no-console
   console.log(`Server running: http://127.0.0.1:${PORT}/web/body-battery-test.html`);
 });
-

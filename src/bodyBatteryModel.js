@@ -243,12 +243,12 @@
       baseSleepChargePerHour: 10.5,
       baseRestChargePerHour: 2,
       baseMindChargePerHour: 4,
-      loadDrainWorkoutMaxPerHour: 35,
+      loadDrainWorkoutMaxPerHour: 35.7,
       workoutHrWeight: 1.2,
-      loadDrainHighMaxPerHour: 26,
-      loadDrainActiveMaxPerHour: 18,
-      loadDrainLightMaxPerHour: 12,
-      loadDrainInactiveMaxPerHour: 6,
+      loadDrainHighMaxPerHour: 26.52,
+      loadDrainActiveMaxPerHour: 18.36,
+      loadDrainLightMaxPerHour: 12.24,
+      loadDrainInactiveMaxPerHour: 6.12,
       // Auto state engine thresholds (0-1)
       stateLightMin01: 0.15,
       stateActiveMin01: 0.4,
@@ -377,15 +377,27 @@
       const ts = parseTimestampMs(e);
 
       let dtHours = dtHoursDefault;
+      let dtObservedMinutes = null;
       if (prevTs !== null && ts !== null) {
         const diffH = (ts - prevTs) / 3600000;
-        if (Number.isFinite(diffH) && diffH > 0.1 / 60 && diffH < 6) dtHours = diffH;
+        if (Number.isFinite(diffH) && diffH > 0.1 / 60) {
+          dtObservedMinutes = diffH * 60;
+
+          // Epochs are expected to represent a fixed interval (epochMinutes).
+          // If timestamps have large gaps (missing epochs), don't treat that whole gap as one epoch duration;
+          // it can cause physiologically implausible BB jumps (e.g. workout draining BB to 0 in one step).
+          const tolMin = 0.5;
+          const tolMax = 1.5;
+          const minH = dtHoursDefault * tolMin;
+          const maxH = dtHoursDefault * tolMax;
+          if (Number.isFinite(minH) && Number.isFinite(maxH) && diffH >= minH && diffH <= maxH) dtHours = diffH;
+        }
       }
       prevTs = ts ?? prevTs;
 
       const dtMinutes = dtHours * 60;
       const context0 = e.context ? { ...(e.context || {}) } : classifyContext(e, baselines, epochMinutes, params);
-      timeline.push({ tsMs: ts, dtMinutes, dtHours, context0 });
+      timeline.push({ tsMs: ts, dtMinutes, dtHours, dtObservedMinutes, context0 });
     }
     return timeline;
   }
@@ -1463,6 +1475,7 @@
       const ts = t.tsMs ?? null;
       const dtHours = Number.isFinite(Number(t.dtHours)) ? Number(t.dtHours) : params.epochMinutes / 60;
       const dtMinutes = Number.isFinite(Number(t.dtMinutes)) ? Number(t.dtMinutes) : dtHours * 60;
+      const dtCarryMinutes = Number.isFinite(Number(t.dtObservedMinutes)) ? Number(t.dtObservedMinutes) : dtMinutes;
 
       const context0 =
         t.context0 && typeof t.context0 === "object" ? t.context0 : classifyContext(e, baselines, params.epochMinutes, params);
@@ -1475,11 +1488,11 @@
       const rawRr = toNumberOrNull(e.respRateBrpm ?? e.respiratoryRate ?? e.rr);
       const rawTemp = toNumberOrNull(e.wristTempC ?? e.tempC ?? e.temp);
 
-      tickCarry(carry.hr, rawHr, dtMinutes, context0.kind);
-      tickCarry(carry.hrv, rawHrv, dtMinutes, context0.kind);
-      tickCarry(carry.spo2, rawSpo2, dtMinutes, context0.kind);
-      tickCarry(carry.rr, rawRr, dtMinutes, context0.kind);
-      tickCarry(carry.temp, rawTemp, dtMinutes, context0.kind);
+      tickCarry(carry.hr, rawHr, dtCarryMinutes, context0.kind);
+      tickCarry(carry.hrv, rawHrv, dtCarryMinutes, context0.kind);
+      tickCarry(carry.spo2, rawSpo2, dtCarryMinutes, context0.kind);
+      tickCarry(carry.rr, rawRr, dtCarryMinutes, context0.kind);
+      tickCarry(carry.temp, rawTemp, dtCarryMinutes, context0.kind);
 
       const allowSleepVitals = context0.kind === "SLEEP";
       const hrImp = maybeImpute(rawHr, carry.hr, {

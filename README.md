@@ -17,10 +17,13 @@ node server.js
 2. 打开测试页：
 
 - `http://127.0.0.1:8787/web/body-battery-test.html`
+- `http://127.0.0.1:8787/web/body-battery-explainer.html`（算法动画解释器）
 
 ## 直接打开 HTML（不启 server 也可以）
 
 用浏览器直接打开：`web/body-battery-test.html`
+
+（可选）算法动画解释器：`web/body-battery-explainer.html`
 
 ## 代码位置
 

@@ -48,6 +48,37 @@ assert(workout[0].drainComponents.loadPerHour > 0);
 assert.notStrictEqual(workout[1].context.kind, "WORKOUT");
 assert(workout[1].drainComponents.loadPerHour <= workout[0].drainComponents.loadPerHour);
 
+// Large timestamp gaps should not be treated as a single long epoch duration.
+// Otherwise one workout epoch can drain BB to 0 in one step.
+(() => {
+  const epochMinutes = 5;
+  const startMs = Date.UTC(2025, 0, 1, 0, 0, 0);
+  const mk = (tMs, patch) => ({ timestampMs: tMs, ...patch });
+
+  const cfg = {
+    epochMinutes,
+    initialBB: 70,
+    baselines: {
+      rhrBpm: 60,
+      hrvSdnnMs: 55,
+      spo2Pct: 97,
+      respRateBrpm: 14,
+      wristTempC: 36.55,
+      ftpW: 220,
+      hrMaxBpm: 190,
+    },
+    epochs: [
+      mk(startMs, { workout: true, hrBpm: 150, steps: 150, activeEnergyKcal: 45, powerW: 210 }),
+      mk(startMs + 5 * 3600 * 1000, { workout: true, hrBpm: 150, steps: 150, activeEnergyKcal: 45, powerW: 210 }),
+    ],
+  };
+
+  const series = BodyBatteryModel.computeSeries(cfg).series;
+  assert.strictEqual(series.length, 2);
+  assert.strictEqual(series[1].dtMinutes, epochMinutes);
+  assert(series[1].bbNext > 0, `Expected BB not to clamp to 0 due to a timestamp gap. got bbNext=${series[1].bbNext}`);
+})();
+
 (() => {
   const epochMinutes = 5;
   const startMs = Date.UTC(2025, 0, 1, 3, 0, 0);

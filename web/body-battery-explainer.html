@@ -1,0 +1,1374 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Body Battery 算法动画解释器</title>
+    <style>
+      :root {
+        --bg: #0b1220;
+        --card: #111a2d;
+        --border: #243252;
+        --text: #e8eefc;
+        --muted: #9db0da;
+        --accent: #7aa2ff;
+        --good: #3ddc97;
+        --danger: #ff6b6b;
+        --warn: #ffd166;
+        --mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      body {
+        margin: 0;
+        font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial;
+        background: radial-gradient(1200px 800px at 20% 0%, #17264d 0%, var(--bg) 55%);
+        color: var(--text);
+      }
+
+      header {
+        padding: 22px 18px 12px;
+        max-width: 1240px;
+        margin: 0 auto;
+      }
+
+      header h1 {
+        margin: 0 0 6px;
+        font-size: 18px;
+        font-weight: 800;
+        letter-spacing: 0.2px;
+      }
+
+      header p {
+        margin: 0;
+        color: var(--muted);
+        line-height: 1.55;
+        font-size: 13px;
+      }
+
+      a {
+        color: var(--accent);
+        text-decoration: none;
+      }
+
+      a:hover {
+        text-decoration: underline;
+      }
+
+      code {
+        font-family: var(--mono);
+        background: rgba(255, 255, 255, 0.06);
+        border: 1px solid rgba(255, 255, 255, 0.08);
+        padding: 2px 6px;
+        border-radius: 8px;
+      }
+
+      .wrap {
+        max-width: 1240px;
+        margin: 0 auto;
+        padding: 12px 18px 32px;
+        display: grid;
+        grid-template-columns: 1fr;
+        gap: 14px;
+      }
+
+      @media (min-width: 980px) {
+        .wrap {
+          grid-template-columns: 410px 1fr;
+          align-items: start;
+        }
+      }
+
+      .card {
+        background: linear-gradient(180deg, rgba(255, 255, 255, 0.035), rgba(255, 255, 255, 0.015));
+        border: 1px solid var(--border);
+        border-radius: 14px;
+        padding: 14px;
+        box-shadow: 0 12px 30px rgba(0, 0, 0, 0.25);
+      }
+
+      .card h2 {
+        margin: 0 0 10px;
+        font-size: 13px;
+        color: #cfe0ff;
+      }
+
+      .row {
+        display: grid;
+        gap: 10px;
+      }
+
+      .row.two {
+        grid-template-columns: 1fr 1fr;
+      }
+
+      label {
+        display: grid;
+        gap: 6px;
+        font-size: 12px;
+        color: var(--muted);
+      }
+
+      label.checkbox {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+      }
+
+      input[type="number"],
+      input[type="range"],
+      select,
+      textarea {
+        width: 100%;
+        border-radius: 10px;
+        border: 1px solid var(--border);
+        background: rgba(10, 16, 30, 0.65);
+        color: var(--text);
+        padding: 9px 10px;
+        font-size: 13px;
+      }
+
+      input[type="range"] {
+        padding: 0;
+        height: 34px;
+      }
+
+      button {
+        border: 1px solid var(--border);
+        background: rgba(10, 16, 30, 0.65);
+        color: var(--text);
+        border-radius: 12px;
+        padding: 10px 10px;
+        font-size: 13px;
+        cursor: pointer;
+        transition: transform 120ms ease, border-color 120ms ease, background 120ms ease;
+      }
+
+      button:hover {
+        transform: translateY(-1px);
+        border-color: rgba(122, 162, 255, 0.55);
+      }
+
+      button.primary {
+        border-color: rgba(122, 162, 255, 0.75);
+        background: rgba(122, 162, 255, 0.14);
+      }
+
+      button.danger {
+        border-color: rgba(255, 107, 107, 0.7);
+        background: rgba(255, 107, 107, 0.12);
+      }
+
+      .pillrow {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+      }
+
+      .pill {
+        display: inline-flex;
+        align-items: center;
+        gap: 8px;
+        border: 1px solid var(--border);
+        border-radius: 999px;
+        padding: 7px 10px;
+        font-size: 12px;
+        color: var(--muted);
+        background: rgba(0, 0, 0, 0.18);
+      }
+
+      .dot {
+        width: 10px;
+        height: 10px;
+        border-radius: 50%;
+        background: var(--accent);
+        box-shadow: 0 0 0 3px rgba(122, 162, 255, 0.18);
+      }
+
+      .hint {
+        margin: 10px 0 0;
+        font-size: 12px;
+        color: var(--muted);
+        line-height: 1.55;
+      }
+
+      .vizGrid {
+        display: grid;
+        gap: 12px;
+      }
+
+      .canvasWrap {
+        border: 1px solid var(--border);
+        border-radius: 14px;
+        overflow: hidden;
+        background: rgba(5, 9, 18, 0.5);
+      }
+
+      canvas {
+        display: block;
+        width: 100%;
+        height: 100%;
+      }
+
+      #timeline {
+        height: 66px;
+      }
+
+      #chart {
+        height: 320px;
+      }
+
+      .subgrid {
+        display: grid;
+        gap: 12px;
+        grid-template-columns: 1fr;
+      }
+
+      @media (min-width: 980px) {
+        .subgrid {
+          grid-template-columns: 1fr 1fr;
+        }
+      }
+
+      .kv {
+        display: grid;
+        grid-template-columns: 120px 1fr;
+        gap: 8px 12px;
+        font-size: 12px;
+        line-height: 1.35;
+      }
+
+      .k {
+        color: var(--muted);
+        font-family: var(--mono);
+      }
+
+      .v {
+        color: var(--text);
+        font-family: var(--mono);
+      }
+
+      .mono {
+        font-family: var(--mono);
+      }
+
+      .ok {
+        color: var(--good);
+      }
+
+      .bad {
+        color: var(--danger);
+      }
+
+      .warn {
+        color: var(--warn);
+      }
+
+      details {
+        border: 1px solid rgba(255, 255, 255, 0.08);
+        border-radius: 12px;
+        padding: 10px;
+        background: rgba(0, 0, 0, 0.16);
+      }
+
+      details summary {
+        cursor: pointer;
+        font-size: 12px;
+        color: #cfe0ff;
+        font-weight: 650;
+      }
+
+      .footer {
+        margin-top: 10px;
+        font-size: 12px;
+        color: var(--muted);
+        line-height: 1.5;
+      }
+    </style>
+  </head>
+  <body>
+    <header>
+      <h1>Body Battery 算法动画解释器</h1>
+      <p>
+        用几个预设场景（良好睡眠 / 碎片化睡眠 / 热负荷异常）生成 epoch 数据，并逐步动画展示模型如何从信号→上下文→门控→充放电，更新
+        <code>Reserve(BB)</code>。
+        （模型代码：<a href="/src/bodyBatteryModel.js"><code>/src/bodyBatteryModel.js</code></a
+        >）
+      </p>
+    </header>
+
+    <div class="wrap">
+      <section class="card" id="controls">
+        <h2>场景</h2>
+        <div class="row">
+          <div class="row two">
+            <button id="btnGood" class="primary">良好睡眠</button>
+            <button id="btnFragmented">碎片化睡眠</button>
+          </div>
+          <button id="btnHot" class="danger">热负荷/异常（恢复打折）</button>
+        </div>
+
+        <div style="height: 10px"></div>
+
+        <h2>播放</h2>
+        <div class="row">
+          <div class="row two">
+            <button id="btnPlay" class="primary">播放</button>
+            <button id="btnReset">重置</button>
+          </div>
+          <div class="row two">
+            <button id="btnPrev">上一步</button>
+            <button id="btnNext">下一步</button>
+          </div>
+          <label>
+            进度（epoch）
+            <input id="scrub" type="range" min="0" max="0" value="0" step="1" />
+          </label>
+          <label>
+            速度（epochs/s）：<span id="speedLabel" class="mono"></span>
+            <input id="speed" type="range" min="0.5" max="12" value="6" step="0.5" />
+          </label>
+        </div>
+
+        <div style="height: 10px"></div>
+
+        <h2>参数（影响“加分/扣分”）</h2>
+        <div class="row">
+          <div class="row two">
+            <label>
+              epochMinutes
+              <input id="epochMinutes" type="number" value="5" min="1" max="15" step="1" />
+            </label>
+            <label>
+              initialBB
+              <input id="initialBB" type="number" value="65" min="0" max="100" step="1" />
+            </label>
+          </div>
+          <div class="row two">
+            <label>
+              baseSleepChargePerHour
+              <input id="baseSleepChargePerHour" type="number" value="9" min="0" max="25" step="0.5" />
+            </label>
+            <label>
+              maxDeltaPerHour
+              <input id="maxDeltaPerHour" type="number" value="25" min="1" max="60" step="1" />
+            </label>
+          </div>
+          <div class="row two">
+            <label class="checkbox">
+              <input id="toggleComfort" type="checkbox" checked />
+              显示 Comfort
+            </label>
+            <label class="checkbox">
+              <input id="toggleFatigue" type="checkbox" checked />
+              显示 Fatigue
+            </label>
+          </div>
+          <label class="checkbox">
+            <input id="toggleDelta" type="checkbox" checked />
+            显示 Δ（每个 epoch 的净变化）
+          </label>
+        </div>
+
+        <div style="height: 10px"></div>
+
+        <details>
+          <summary>说明（这页在演示什么）</summary>
+          <p class="hint">
+            这不是医疗诊断，只是一个“可解释主干”的演示：它把 HR/HRV/SpO₂/RR/腕温/步数等信号映射到三个层次：
+          </p>
+          <div class="pillrow">
+            <span class="pill"><span class="dot"></span><span>Context：睡眠/训练/清醒</span></span>
+            <span class="pill"><span class="dot" style="background: var(--good)"></span><span>Charge：恢复</span></span>
+            <span class="pill"><span class="dot" style="background: var(--danger)"></span><span>Drain：消耗</span></span>
+            <span class="pill"><span class="dot" style="background: var(--warn)"></span><span>Gate：质量门控</span></span>
+          </div>
+          <p class="hint">
+            播放时，右侧会同步高亮当前 epoch，并展示用于计算的关键量（例如睡眠阶段因子、HRV/HR 对恢复的调制、异常惩罚、饱和项、限速项等）。
+          </p>
+        </details>
+
+        <div class="footer">
+          小贴士：如果你觉得“睡眠加分不合理”，通常是 <code>sleepStage</code> 标注、缺失数据的质量门控、或温度异常/压力项在起作用。
+        </div>
+      </section>
+
+      <section class="card" id="viz">
+        <div class="vizGrid">
+          <div class="canvasWrap">
+            <canvas id="timeline" height="66"></canvas>
+          </div>
+          <div class="canvasWrap">
+            <canvas id="chart" height="320"></canvas>
+          </div>
+
+          <div class="subgrid">
+            <section class="card" style="margin: 0">
+              <h2>当前 epoch（输入→上下文→输出）</h2>
+              <div class="kv" id="kvNow"></div>
+            </section>
+            <section class="card" style="margin: 0">
+              <h2>公式拆解（这一步为什么加/扣）</h2>
+              <div class="kv" id="kvMath"></div>
+            </section>
+          </div>
+        </div>
+      </section>
+    </div>
+
+    <script src="../src/bodyBatteryModel.js"></script>
+    <script>
+      (function () {
+        "use strict";
+
+        if (!window.BodyBatteryModel) {
+          const el = document.getElementById("kvNow");
+          if (el) el.textContent = "BodyBatteryModel 未加载：请从本仓库静态服务打开本页面。";
+          return;
+        }
+
+        function clamp(value, min, max) {
+          if (!Number.isFinite(value)) return min;
+          return Math.min(max, Math.max(min, value));
+        }
+
+        function toNumberOrNull(v) {
+          if (v === null || v === undefined || v === "") return null;
+          const n = Number(v);
+          return Number.isFinite(n) ? n : null;
+        }
+
+        function fmt(n, digits) {
+          if (n === null || n === undefined) return "null";
+          if (!Number.isFinite(n)) return "null";
+          const d = Number.isFinite(digits) ? digits : 2;
+          return Number(n).toFixed(d);
+        }
+
+        function seedFromString(str) {
+          let h = 2166136261;
+          for (let i = 0; i < String(str).length; i++) {
+            h ^= str.charCodeAt(i);
+            h = Math.imul(h, 16777619);
+          }
+          return h >>> 0;
+        }
+
+        function mulberry32(seed) {
+          let a = seed >>> 0;
+          return function () {
+            a |= 0;
+            a = (a + 0x6d2b79f5) | 0;
+            let t = Math.imul(a ^ (a >>> 15), 1 | a);
+            t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+            return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+          };
+        }
+
+        function jitter(rand, value, amp) {
+          if (value === null || value === undefined) return null;
+          if (!Number.isFinite(value)) return null;
+          const a = Number.isFinite(amp) ? amp : 0;
+          return value + (rand() - 0.5) * 2 * a;
+        }
+
+        function stageFactor(sleepStage) {
+          if (!sleepStage) return 1;
+          const s = String(sleepStage).toLowerCase();
+          if (s.includes("deep")) return 1.2;
+          if (s.includes("core") || s.includes("light")) return 1;
+          if (s.includes("rem")) return 0.9;
+          if (s.includes("awake")) return 0.25;
+          if (s.includes("inbed") || s.includes("in_bed")) return 0.35;
+          return 1;
+        }
+
+        function normalizeZ(value, base, scale) {
+          if (!Number.isFinite(value) || !Number.isFinite(base) || !Number.isFinite(scale) || scale <= 0) return null;
+          return (value - base) / scale;
+        }
+
+        function weightedAvg01(weights, qualities) {
+          let sumW = 0;
+          let sum = 0;
+          for (const [k, w] of Object.entries(weights || {})) {
+            const ww = Number.isFinite(w) ? w : 0;
+            if (ww <= 0) continue;
+            sumW += ww;
+            sum += ww * clamp(Number(qualities?.[k] ?? 0), 0, 1);
+          }
+          if (sumW <= 0) return 0;
+          return clamp(sum / sumW, 0, 1);
+        }
+
+        function gateWeights(priorWeights, componentQuality, minScale) {
+          const gated = {};
+          let sum = 0;
+          for (const [k, w] of Object.entries(priorWeights || {})) {
+            const q = clamp(Number(componentQuality?.[k] ?? 0), 0, 1);
+            const ww = clamp(Number(w), 0, 1) * q;
+            gated[k] = ww;
+            sum += ww;
+          }
+
+          if (sum > 0) {
+            for (const k of Object.keys(gated)) gated[k] = gated[k] / sum;
+          } else {
+            for (const [k, w] of Object.entries(priorWeights || {})) gated[k] = clamp(Number(w), 0, 1);
+          }
+
+          const groupQuality = weightedAvg01(priorWeights || {}, componentQuality || {});
+          const minS = clamp(Number(minScale), 0, 1);
+          const groupScale = clamp(minS + (1 - minS) * groupQuality, minS, 1);
+
+          return { weights: gated, groupQuality, groupScale };
+        }
+
+        function ruleWeights(kind) {
+          switch (kind) {
+            case "SLEEP":
+              return { charge: { sleep: 1, rest: 0, mind: 0 }, drain: { load: 0.08, stress: 0.32, anom: 0.6 } };
+            case "WORKOUT":
+              return { charge: { sleep: 0, rest: 0, mind: 0 }, drain: { load: 0.78, stress: 0.22, anom: 0 } };
+            case "MEDITATION":
+              return {
+                charge: { sleep: 0, rest: 0.25, mind: 0.75 },
+                drain: { load: 0.05, stress: 0.95, anom: 0 },
+              };
+            case "AWAKE_REST":
+              return { charge: { sleep: 0, rest: 1, mind: 0 }, drain: { load: 0.15, stress: 0.85, anom: 0 } };
+            case "POST_ACTIVITY_RECOVERY":
+              return { charge: { sleep: 0, rest: 0.9, mind: 0.1 }, drain: { load: 0.1, stress: 0.9, anom: 0 } };
+            case "ACTIVE":
+              return { charge: { sleep: 0, rest: 0.05, mind: 0 }, drain: { load: 0.72, stress: 0.28, anom: 0 } };
+            case "LIGHT_ACTIVITY":
+              return { charge: { sleep: 0, rest: 0.12, mind: 0 }, drain: { load: 0.62, stress: 0.38, anom: 0 } };
+            case "AWAKE":
+            default:
+              return { charge: { sleep: 0, rest: 0.18, mind: 0 }, drain: { load: 0.45, stress: 0.55, anom: 0 } };
+          }
+        }
+
+        function classifyKindFromEpoch(epoch, baselines, epochMinutes) {
+          const sleepStageRaw = epoch.sleepStage ?? epoch.sleep ?? null;
+          const sleepStage =
+            sleepStageRaw === null || sleepStageRaw === undefined || sleepStageRaw === "" ? null : String(sleepStageRaw);
+          if (sleepStage && sleepStage !== "awake") return { kind: "SLEEP", sleepStage };
+
+          const mindful = Boolean(epoch.mindful ?? epoch.mindfulness ?? epoch.isMindful);
+          if (mindful) return { kind: "MEDITATION" };
+
+          const workout = Boolean(epoch.workout ?? epoch.isWorkout);
+          if (workout) return { kind: "WORKOUT", workoutType: epoch.workoutType ?? null };
+
+          const dtMin = Number.isFinite(epochMinutes) && epochMinutes > 0 ? epochMinutes : 5;
+          const steps = toNumberOrNull(epoch.steps) ?? 0;
+          const hr = toNumberOrNull(epoch.hrBpm ?? epoch.hr);
+          const power = toNumberOrNull(epoch.powerW ?? epoch.power);
+          const activeEnergy = toNumberOrNull(epoch.activeEnergyKcal ?? epoch.activeEnergy ?? epoch.energyKcal);
+
+          const stepsPerMin = steps / dtMin;
+          const hasActivitySignal =
+            stepsPerMin >= 8 || (activeEnergy !== null && activeEnergy / dtMin >= 1.2) || (power !== null && power >= 60);
+
+          const rhr = baselines?.rhrBpm ?? 60;
+          const isRestLike = !hasActivitySignal && hr !== null && hr <= rhr + 12;
+          if (isRestLike) return { kind: "AWAKE_REST" };
+
+          if (!hasActivitySignal) return { kind: "AWAKE" };
+          if (stepsPerMin < 40 && (power === null || power < 120)) return { kind: "LIGHT_ACTIVITY" };
+          return { kind: "ACTIVE" };
+        }
+
+        function buildEpochsFromSegments(segments, epochMinutes, seedLabel) {
+          const dtMin = Number.isFinite(epochMinutes) && epochMinutes > 0 ? epochMinutes : 5;
+          const rand = mulberry32(seedFromString(seedLabel || "seed"));
+          const epochs = [];
+          const startTs = Date.UTC(2025, 0, 1, 22, 0, 0, 0);
+          let t = startTs;
+
+          function mapSleepStage(type) {
+            if (type === "sleep_deep") return "deep";
+            if (type === "sleep_core") return "core";
+            if (type === "sleep_rem") return "rem";
+            if (type === "sleep_inbed") return "inBed";
+            if (type === "sleep_awake") return "awake";
+            return null;
+          }
+
+          for (const seg of segments) {
+            const durationMin = Math.max(0, Number(seg.durationMin ?? 0));
+            const stepsPerMin = Number(seg.stepsPerMin ?? 0);
+            const energyPerMin = Number(seg.energyKcalPerMin ?? 0);
+            const powerW = toNumberOrNull(seg.powerW);
+            const mindful = Boolean(seg.mindful);
+            const workout = Boolean(seg.workout);
+
+            const stage = mapSleepStage(String(seg.type || ""));
+            const loops = Math.max(1, Math.round(durationMin / dtMin));
+
+            for (let k = 0; k < loops; k++) {
+              const steps = Math.max(0, Math.round(jitter(rand, stepsPerMin * dtMin, Math.max(0, stepsPerMin * 0.25))));
+              const activeEnergyKcal = Math.max(0, jitter(rand, energyPerMin * dtMin, Math.max(0, energyPerMin * 0.3)));
+              const hrBpm = jitter(rand, Number(seg.hrBpm ?? 60), 1.2);
+              const hrvSdnnMs = jitter(rand, toNumberOrNull(seg.hrvSdnnMs), 2.5);
+              const spo2Pct = jitter(rand, toNumberOrNull(seg.spo2Pct), 0.25);
+              const respRateBrpm = jitter(rand, toNumberOrNull(seg.respRateBrpm), 0.25);
+              const wristTempC = jitter(rand, toNumberOrNull(seg.wristTempC), 0.03);
+
+              const e = {
+                timestampMs: t,
+                hrBpm: hrBpm === null ? null : Math.round(hrBpm),
+                hrvSdnnMs: hrvSdnnMs === null ? null : Math.round(hrvSdnnMs),
+                spo2Pct: spo2Pct === null ? null : Number(spo2Pct.toFixed(1)),
+                respRateBrpm: respRateBrpm === null ? null : Number(respRateBrpm.toFixed(1)),
+                wristTempC: wristTempC === null ? null : Number(wristTempC.toFixed(2)),
+                steps,
+                activeEnergyKcal: Number(activeEnergyKcal.toFixed(2)),
+              };
+              if (powerW !== null) e.powerW = powerW;
+              if (mindful) e.mindful = true;
+              if (workout) e.workout = true;
+              if (stage !== null) e.sleepStage = stage;
+              epochs.push(e);
+              t += dtMin * 60 * 1000;
+            }
+          }
+
+          return epochs;
+        }
+
+        function segmentsGoodSleep() {
+          return [
+            { type: "sleep_inbed", durationMin: 20, hrBpm: 62, hrvSdnnMs: 45, spo2Pct: 97, respRateBrpm: 14, wristTempC: 36.55 },
+            { type: "sleep_core", durationMin: 210, hrBpm: 54, hrvSdnnMs: 60, spo2Pct: 97, respRateBrpm: 13.4, wristTempC: 36.58 },
+            { type: "sleep_deep", durationMin: 70, hrBpm: 50, hrvSdnnMs: 75, spo2Pct: 97.5, respRateBrpm: 12.8, wristTempC: 36.55 },
+            { type: "sleep_core", durationMin: 120, hrBpm: 55, hrvSdnnMs: 62, spo2Pct: 97.2, respRateBrpm: 13.6, wristTempC: 36.6 },
+            { type: "sleep_rem", durationMin: 60, hrBpm: 59, hrvSdnnMs: 52, spo2Pct: 97, respRateBrpm: 14.7, wristTempC: 36.62 },
+            { type: "awake", durationMin: 40, hrBpm: 72, hrvSdnnMs: 50, spo2Pct: 97, respRateBrpm: 14, wristTempC: 36.55, stepsPerMin: 18, energyKcalPerMin: 0.6 },
+            { type: "active", durationMin: 80, hrBpm: 96, hrvSdnnMs: 42, spo2Pct: 97, respRateBrpm: 16, wristTempC: 36.55, stepsPerMin: 55, energyKcalPerMin: 2.2 },
+            { type: "workout", durationMin: 45, hrBpm: 152, hrvSdnnMs: 25, spo2Pct: 96.5, respRateBrpm: 22, wristTempC: 36.7, stepsPerMin: 135, energyKcalPerMin: 7.5, workout: true },
+            { type: "rest", durationMin: 50, hrBpm: 70, hrvSdnnMs: 38, spo2Pct: 97, respRateBrpm: 15, wristTempC: 36.6, stepsPerMin: 2, energyKcalPerMin: 0.25 },
+            { type: "light", durationMin: 90, hrBpm: 92, hrvSdnnMs: 40, spo2Pct: 97, respRateBrpm: 15, wristTempC: 36.58, stepsPerMin: 28, energyKcalPerMin: 1.2 },
+          ];
+        }
+
+        function segmentsFragmentedSleep() {
+          return [
+            { type: "sleep_inbed", durationMin: 20, hrBpm: 64, hrvSdnnMs: 40, spo2Pct: 97, respRateBrpm: 14.5, wristTempC: 36.6 },
+            { type: "sleep_core", durationMin: 45, hrBpm: 58, hrvSdnnMs: 52, spo2Pct: 97, respRateBrpm: 14.2, wristTempC: 36.63 },
+            { type: "sleep_awake", durationMin: 10, hrBpm: 66, hrvSdnnMs: 40, spo2Pct: 97, respRateBrpm: 15.5, wristTempC: 36.66 },
+            { type: "sleep_core", durationMin: 35, hrBpm: 57, hrvSdnnMs: 54, spo2Pct: 97, respRateBrpm: 14.2, wristTempC: 36.63 },
+            { type: "sleep_awake", durationMin: 15, hrBpm: 70, hrvSdnnMs: 38, spo2Pct: 96.8, respRateBrpm: 16, wristTempC: 36.7, stepsPerMin: 4, energyKcalPerMin: 0.2 },
+            { type: "sleep_rem", durationMin: 35, hrBpm: 61, hrvSdnnMs: 45, spo2Pct: 97, respRateBrpm: 15.2, wristTempC: 36.68 },
+            { type: "sleep_core", durationMin: 60, hrBpm: 56, hrvSdnnMs: 55, spo2Pct: 97, respRateBrpm: 14.4, wristTempC: 36.64 },
+            { type: "sleep_awake", durationMin: 10, hrBpm: 69, hrvSdnnMs: 39, spo2Pct: 96.7, respRateBrpm: 16.3, wristTempC: 36.75 },
+            { type: "sleep_deep", durationMin: 45, hrBpm: 53, hrvSdnnMs: 62, spo2Pct: 97.2, respRateBrpm: 13.6, wristTempC: 36.6 },
+            { type: "sleep_core", durationMin: 75, hrBpm: 56, hrvSdnnMs: 53, spo2Pct: 97, respRateBrpm: 14.8, wristTempC: 36.66 },
+            { type: "awake", durationMin: 60, hrBpm: 76, hrvSdnnMs: 45, spo2Pct: 97, respRateBrpm: 14.5, wristTempC: 36.6, stepsPerMin: 16, energyKcalPerMin: 0.6 },
+            { type: "light", durationMin: 120, hrBpm: 94, hrvSdnnMs: 40, spo2Pct: 97, respRateBrpm: 15.5, wristTempC: 36.6, stepsPerMin: 32, energyKcalPerMin: 1.4 },
+          ];
+        }
+
+        function segmentsHotStress() {
+          return [
+            { type: "sleep_inbed", durationMin: 20, hrBpm: 68, hrvSdnnMs: 35, spo2Pct: 96.5, respRateBrpm: 15.5, wristTempC: 37.05 },
+            { type: "sleep_core", durationMin: 180, hrBpm: 66, hrvSdnnMs: 34, spo2Pct: 95.5, respRateBrpm: 16.8, wristTempC: 37.15 },
+            { type: "sleep_deep", durationMin: 60, hrBpm: 62, hrvSdnnMs: 38, spo2Pct: 95.2, respRateBrpm: 17.2, wristTempC: 37.25 },
+            { type: "sleep_core", durationMin: 140, hrBpm: 67, hrvSdnnMs: 32, spo2Pct: 95.0, respRateBrpm: 17.6, wristTempC: 37.3 },
+            { type: "sleep_rem", durationMin: 55, hrBpm: 72, hrvSdnnMs: 26, spo2Pct: 94.6, respRateBrpm: 18.4, wristTempC: 37.35 },
+            { type: "awake", durationMin: 45, hrBpm: 84, hrvSdnnMs: 30, spo2Pct: 96, respRateBrpm: 16.5, wristTempC: 37.1, stepsPerMin: 12, energyKcalPerMin: 0.7 },
+            { type: "rest", durationMin: 90, hrBpm: 80, hrvSdnnMs: 28, spo2Pct: 96.5, respRateBrpm: 16.2, wristTempC: 37.05, stepsPerMin: 2, energyKcalPerMin: 0.25 },
+            { type: "light", durationMin: 90, hrBpm: 96, hrvSdnnMs: 26, spo2Pct: 96.3, respRateBrpm: 17.2, wristTempC: 37.0, stepsPerMin: 28, energyKcalPerMin: 1.4 },
+          ];
+        }
+
+        const ui = {
+          btnGood: document.getElementById("btnGood"),
+          btnFragmented: document.getElementById("btnFragmented"),
+          btnHot: document.getElementById("btnHot"),
+          btnPlay: document.getElementById("btnPlay"),
+          btnReset: document.getElementById("btnReset"),
+          btnPrev: document.getElementById("btnPrev"),
+          btnNext: document.getElementById("btnNext"),
+          scrub: document.getElementById("scrub"),
+          speed: document.getElementById("speed"),
+          speedLabel: document.getElementById("speedLabel"),
+          epochMinutes: document.getElementById("epochMinutes"),
+          initialBB: document.getElementById("initialBB"),
+          baseSleepChargePerHour: document.getElementById("baseSleepChargePerHour"),
+          maxDeltaPerHour: document.getElementById("maxDeltaPerHour"),
+          toggleComfort: document.getElementById("toggleComfort"),
+          toggleFatigue: document.getElementById("toggleFatigue"),
+          toggleDelta: document.getElementById("toggleDelta"),
+          timeline: document.getElementById("timeline"),
+          chart: document.getElementById("chart"),
+          kvNow: document.getElementById("kvNow"),
+          kvMath: document.getElementById("kvMath"),
+        };
+
+        function resizeCanvasToDisplaySize(canvas) {
+          const ratio = Math.max(1, Math.floor(window.devicePixelRatio || 1));
+          const cssW = canvas.clientWidth;
+          const cssH = canvas.clientHeight;
+          const wantW = Math.max(1, Math.floor(cssW * ratio));
+          const wantH = Math.max(1, Math.floor(cssH * ratio));
+          if (canvas.width !== wantW || canvas.height !== wantH) {
+            canvas.width = wantW;
+            canvas.height = wantH;
+          }
+          return { ratio, w: wantW, h: wantH };
+        }
+
+        const colors = {
+          SLEEP: "#7aa2ff",
+          WORKOUT: "#ff6b6b",
+          ACTIVE: "#ff9f43",
+          LIGHT_ACTIVITY: "#ffd166",
+          AWAKE: "#9db0da",
+          AWAKE_REST: "#3ddc97",
+          MEDITATION: "#c77dff",
+          POST_ACTIVITY_RECOVERY: "#45d6ff",
+          deep: "#7aa2ff",
+          core: "#4cc9f0",
+          rem: "#b5179e",
+          inbed: "#9db0da",
+          awake: "#8d99ae",
+        };
+
+        function colorForContext(ctx) {
+          if (!ctx || !ctx.kind) return colors.AWAKE;
+          if (ctx.kind === "SLEEP") {
+            const st = String(ctx.sleepStage || "").toLowerCase();
+            if (st.includes("deep")) return colors.deep;
+            if (st.includes("core") || st.includes("light")) return colors.core;
+            if (st.includes("rem")) return colors.rem;
+            if (st.includes("inbed")) return colors.inbed;
+            return colors.SLEEP;
+          }
+          return colors[ctx.kind] || colors.AWAKE;
+        }
+
+        function hexToRgba(hex, alpha) {
+          const h = String(hex || "").replace("#", "").trim();
+          if (h.length !== 6) return `rgba(255,255,255,${alpha})`;
+          const r = parseInt(h.slice(0, 2), 16);
+          const g = parseInt(h.slice(2, 4), 16);
+          const b = parseInt(h.slice(4, 6), 16);
+          return `rgba(${r},${g},${b},${alpha})`;
+        }
+
+        function buildBaselines() {
+          return {
+            rhrBpm: 60,
+            rhrScaleBpm: 6,
+            hrvSdnnMs: 50,
+            hrvScaleMs: 20,
+            spo2Pct: 97,
+            spo2ScalePct: 1.5,
+            respRateBrpm: 14,
+            respRateScaleBrpm: 2,
+            wristTempC: 36.5,
+            wristTempScaleC: 0.3,
+            ftpW: 220,
+            hrMaxBpm: 190,
+            wristTempBaselineDays: 14,
+          };
+        }
+
+        function readUserParams() {
+          const epochMinutes = clamp(toNumberOrNull(ui.epochMinutes.value) ?? 5, 1, 15);
+          const initialBB = clamp(toNumberOrNull(ui.initialBB.value) ?? 65, 0, 100);
+          const baseSleepChargePerHour = clamp(toNumberOrNull(ui.baseSleepChargePerHour.value) ?? 9, 0, 30);
+          const maxDeltaPerHour = clamp(toNumberOrNull(ui.maxDeltaPerHour.value) ?? 25, 1, 80);
+          return { epochMinutes, initialBB, baseSleepChargePerHour, maxDeltaPerHour };
+        }
+
+        function mkKV(container, items) {
+          container.innerHTML = "";
+          for (const it of items) {
+            const k = document.createElement("div");
+            k.className = "k";
+            k.textContent = it.k;
+            const v = document.createElement("div");
+            v.className = "v";
+            v.textContent = it.v;
+            if (it.className) v.classList.add(it.className);
+            container.appendChild(k);
+            container.appendChild(v);
+          }
+        }
+
+        function computeDerivedStep(row, params, baselines) {
+          const dtHours = Number(row.dtMinutes) / 60;
+          const bb = Number(row.bb);
+
+          const sat = Math.pow(clamp(1 - bb / 100, 0, 1), clamp(Number(params.saturationExponent ?? 0.5), 0.1, 2));
+
+          const ctx = row.context || {};
+          const kind = String(ctx.kind || "AWAKE");
+          const weights = ruleWeights(kind);
+
+          const q = row.quality || {};
+          const qLoad = clamp(Math.max(q.steps ?? 0, q.energy ?? 0, q.power ?? 0, q.hr ?? 0), 0, 1);
+          const qStress = clamp(Math.max(q.hrv ?? 0, q.hr ?? 0), 0, 1);
+          const qAnom = clamp(Math.max(q.spo2 ?? 0, q.rr ?? 0, q.temp ?? 0), 0, 1);
+          const qSleep = clamp(0.4 + 0.3 * (q.hrv ?? 0) + 0.2 * (q.hr ?? 0) + 0.1 * qAnom, 0, 1);
+          const qRest = clamp(0.35 + 0.45 * (q.hr ?? 0) + 0.2 * (q.steps ?? 0), 0, 1);
+          const qMind = clamp(0.35 + 0.4 * (q.hr ?? 0) + 0.25 * (q.hrv ?? 0), 0, 1);
+
+          const chargeGate = gateWeights(weights.charge, { sleep: qSleep, rest: qRest, mind: qMind }, params.minChargeScale);
+          const drainGate = gateWeights(weights.drain, { load: qLoad, stress: qStress, anom: qAnom }, params.minDrainScale);
+
+          const rec = row.chargeComponents || {};
+          const sleepRecovery = Number(rec.sleep ?? 0);
+          const restRecovery = Number(rec.rest ?? 0);
+          const mindRecovery = Number(rec.mind ?? 0);
+          const extraCharge = Math.max(0, Number(rec.calmRecoveryChargePerHour ?? 0));
+
+          const rawChargePerHour =
+            chargeGate.weights.sleep * Number(params.baseSleepChargePerHour ?? 9) * sleepRecovery +
+            chargeGate.weights.rest * Number(params.baseRestChargePerHour ?? 2) * restRecovery +
+            chargeGate.weights.mind * Number(params.baseMindChargePerHour ?? 4) * mindRecovery;
+
+          const chargePerHourCore = sat * chargeGate.groupScale * rawChargePerHour;
+          const chargePerHourExtra = sat * extraCharge;
+          const chargePerHour = chargePerHourCore + chargePerHourExtra;
+
+          const dr = row.drainComponents || {};
+          const loadRate = Number(dr.loadPerHour ?? 0);
+          const stressRate = Number(dr.stressPerHour ?? 0);
+          const anomRate = Number(dr.anomPerHour ?? 0);
+
+          const rawDrainPerHour =
+            drainGate.weights.load * loadRate + drainGate.weights.stress * stressRate + drainGate.weights.anom * anomRate;
+          const drainPerHour = drainGate.groupScale * rawDrainPerHour;
+
+          const chargePoints = dtHours * chargePerHour;
+          const drainPoints = dtHours * drainPerHour;
+          const rawDelta = chargePoints - drainPoints;
+          const maxDelta = Number(params.maxDeltaPerHour ?? 25) * dtHours;
+          const deltaCore = clamp(rawDelta, -maxDelta, maxDelta);
+
+          const hr = toNumberOrNull(row.input?.hr);
+          const hrv = toNumberOrNull(row.input?.hrv);
+          const zHrv = hrv === null ? null : normalizeZ(hrv, Number(baselines.hrvSdnnMs), Number(baselines.hrvScaleMs));
+          let autonomicFactor = 1;
+          if (zHrv !== null) autonomicFactor += 0.15 * clamp(zHrv, -3, 3);
+          if (hr !== null && Number.isFinite(Number(baselines.rhrBpm))) autonomicFactor -= 0.1 * clamp((hr - Number(baselines.rhrBpm)) / 5, 0, 5);
+          autonomicFactor = clamp(autonomicFactor, 0.4, 1.6);
+
+          const anomIndex = toNumberOrNull(dr.anomIndex) ?? 0;
+          const anomPenalty = Math.exp(-0.12 * anomIndex);
+          const stFactor = kind === "SLEEP" ? stageFactor(ctx.sleepStage) : 0;
+          const onsetBoost = clamp(Number(params.tempOnsetBenefitMaxBoost ?? 0.12), 0, 0.5);
+          const onsetIdx = clamp(Number(row.temperature?.onsetBenefitIndex ?? 0), 0, 1);
+          const onsetMult = kind === "SLEEP" && onsetIdx > 0 ? 1 + onsetBoost * onsetIdx : 1;
+
+          return {
+            dtHours,
+            sat,
+            chargeGate,
+            drainGate,
+            rawChargePerHour,
+            rawDrainPerHour,
+            chargePerHour,
+            chargePerHourCore,
+            chargePerHourExtra,
+            drainPerHour,
+            chargePoints,
+            drainPoints,
+            rawDelta,
+            deltaCore,
+            maxDelta,
+            q: { qLoad, qStress, qAnom, qSleep, qRest, qMind },
+            sleepExplainer: { stFactor, zHrv, autonomicFactor, anomIndex, anomPenalty, onsetIdx, onsetMult },
+          };
+        }
+
+        function drawTimeline(state) {
+          const canvas = ui.timeline;
+          if (!canvas) return;
+          const dim = resizeCanvasToDisplaySize(canvas);
+          const ctx = canvas.getContext("2d");
+          if (!ctx) return;
+
+          const w = dim.w;
+          const h = dim.h;
+          ctx.clearRect(0, 0, w, h);
+
+          const series = state.series || [];
+          if (series.length === 0) return;
+
+          const pad = { left: 12 * dim.ratio, right: 12 * dim.ratio, top: 10 * dim.ratio, bottom: 14 * dim.ratio };
+          const barH = h - pad.top - pad.bottom;
+          const usableW = w - pad.left - pad.right;
+
+          const n = series.length;
+          for (let i = 0; i < n; i++) {
+            const x0 = pad.left + (i / n) * usableW;
+            const x1 = pad.left + ((i + 1) / n) * usableW;
+            const c = colorForContext(series[i].context);
+            ctx.fillStyle = hexToRgba(c, 0.85);
+            ctx.fillRect(x0, pad.top, Math.max(1, x1 - x0), barH);
+          }
+
+          // Current marker
+          const i = clamp(state.idx, 0, n - 1);
+          const x = pad.left + ((i + 0.5) / n) * usableW;
+          ctx.strokeStyle = "rgba(255,255,255,0.9)";
+          ctx.lineWidth = 2 * dim.ratio;
+          ctx.beginPath();
+          ctx.moveTo(x, pad.top - 2 * dim.ratio);
+          ctx.lineTo(x, pad.top + barH + 2 * dim.ratio);
+          ctx.stroke();
+
+          // Legend
+          const legend = [
+            ["SLEEP", colors.SLEEP],
+            ["WORKOUT", colors.WORKOUT],
+            ["ACTIVE", colors.ACTIVE],
+            ["REST", colors.AWAKE_REST],
+            ["HEAT", "#ff5c8a"],
+          ];
+          let lx = pad.left;
+          const ly = h - 10 * dim.ratio;
+          ctx.font = `${11 * dim.ratio}px ${getComputedStyle(document.body).fontFamily}`;
+          ctx.textBaseline = "alphabetic";
+          for (const [label, c] of legend) {
+            ctx.fillStyle = hexToRgba(c, 0.95);
+            ctx.fillRect(lx, ly - 8 * dim.ratio, 10 * dim.ratio, 10 * dim.ratio);
+            ctx.fillStyle = "rgba(232,238,252,0.75)";
+            ctx.fillText(label, lx + 14 * dim.ratio, ly);
+            lx += (label.length * 7 + 34) * dim.ratio;
+          }
+        }
+
+        function drawChart(state) {
+          const canvas = ui.chart;
+          if (!canvas) return;
+          const dim = resizeCanvasToDisplaySize(canvas);
+          const g = canvas.getContext("2d");
+          if (!g) return;
+
+          const w = dim.w;
+          const h = dim.h;
+          g.clearRect(0, 0, w, h);
+
+          const series = state.series || [];
+          if (series.length === 0) return;
+
+          const showComfort = Boolean(ui.toggleComfort?.checked);
+          const showFatigue = Boolean(ui.toggleFatigue?.checked);
+          const showDelta = Boolean(ui.toggleDelta?.checked);
+
+          const pad = { left: 44 * dim.ratio, right: 16 * dim.ratio, top: 14 * dim.ratio, bottom: 20 * dim.ratio };
+          const deltaH = showDelta ? 60 * dim.ratio : 0;
+          const plotH = h - pad.top - pad.bottom - deltaH;
+          const plotW = w - pad.left - pad.right;
+          const n = series.length;
+
+          function xOf(i, count) {
+            const denom = Math.max(1, count);
+            return pad.left + (i / denom) * plotW;
+          }
+
+          function yOf(v) {
+            return pad.top + (1 - clamp(v, 0, 100) / 100) * plotH;
+          }
+
+          // Grid
+          g.strokeStyle = "rgba(255,255,255,0.08)";
+          g.lineWidth = 1 * dim.ratio;
+          for (const yv of [0, 25, 50, 75, 100]) {
+            const y = yOf(yv);
+            g.beginPath();
+            g.moveTo(pad.left, y);
+            g.lineTo(pad.left + plotW, y);
+            g.stroke();
+          }
+          g.fillStyle = "rgba(157,176,218,0.7)";
+          g.font = `${11 * dim.ratio}px ${getComputedStyle(document.body).fontFamily}`;
+          g.textBaseline = "middle";
+          for (const yv of [0, 50, 100]) {
+            g.fillText(String(yv), 10 * dim.ratio, yOf(yv));
+          }
+
+          // Reserve line points (n+1)
+          const reserve = [series[0].bb, ...series.map((r) => r.bbNext)];
+
+          // Full curve (muted)
+          g.strokeStyle = "rgba(122,162,255,0.35)";
+          g.lineWidth = 2 * dim.ratio;
+          g.beginPath();
+          for (let i = 0; i < reserve.length; i++) {
+            const x = xOf(i, reserve.length - 1);
+            const y = yOf(reserve[i]);
+            if (i === 0) g.moveTo(x, y);
+            else g.lineTo(x, y);
+          }
+          g.stroke();
+
+          // Filled area to current
+          const idx = clamp(state.idx, 0, n - 1);
+          const upto = idx + 1; // include bbNext of current epoch
+          g.fillStyle = "rgba(122,162,255,0.10)";
+          g.beginPath();
+          for (let i = 0; i <= upto; i++) {
+            const x = xOf(i, reserve.length - 1);
+            const y = yOf(reserve[i]);
+            if (i === 0) g.moveTo(x, y);
+            else g.lineTo(x, y);
+          }
+          g.lineTo(xOf(upto, reserve.length - 1), pad.top + plotH);
+          g.lineTo(xOf(0, reserve.length - 1), pad.top + plotH);
+          g.closePath();
+          g.fill();
+
+          // Highlight curve to current
+          g.strokeStyle = "rgba(122,162,255,0.95)";
+          g.lineWidth = 2.5 * dim.ratio;
+          g.beginPath();
+          for (let i = 0; i <= upto; i++) {
+            const x = xOf(i, reserve.length - 1);
+            const y = yOf(reserve[i]);
+            if (i === 0) g.moveTo(x, y);
+            else g.lineTo(x, y);
+          }
+          g.stroke();
+
+          // Optional lines
+          function drawLine(values, color, alpha, lineW) {
+            g.strokeStyle = hexToRgba(color, alpha);
+            g.lineWidth = lineW * dim.ratio;
+            g.beginPath();
+            for (let i = 0; i < values.length; i++) {
+              const x = xOf(i + 0.5, n);
+              const y = yOf(values[i]);
+              if (i === 0) g.moveTo(x, y);
+              else g.lineTo(x, y);
+            }
+            g.stroke();
+          }
+
+          if (showComfort) drawLine(series.map((r) => r.comfortScore), "#3ddc97", 0.7, 1.5);
+          if (showFatigue) drawLine(series.map((r) => r.fatigueScore), "#ff6b6b", 0.6, 1.5);
+
+          // Playhead
+          const xPlay = xOf(upto, reserve.length - 1);
+          g.strokeStyle = "rgba(255,255,255,0.7)";
+          g.lineWidth = 1.5 * dim.ratio;
+          g.beginPath();
+          g.moveTo(xPlay, pad.top);
+          g.lineTo(xPlay, pad.top + plotH);
+          g.stroke();
+
+          // Current dot
+          const yDot = yOf(reserve[upto]);
+          g.fillStyle = "rgba(122,162,255,1)";
+          g.beginPath();
+          g.arc(xPlay, yDot, 5 * dim.ratio, 0, Math.PI * 2);
+          g.fill();
+          g.strokeStyle = "rgba(0,0,0,0.25)";
+          g.lineWidth = 3 * dim.ratio;
+          g.stroke();
+
+          // Delta bars
+          if (showDelta) {
+            const baseY = pad.top + plotH + deltaH / 2;
+            const maxAbs = Math.max(
+              0.001,
+              ...series.map((r) => Math.abs(Number.isFinite(r.deltaCore) ? r.deltaCore : 0)),
+            );
+            // baseline
+            g.strokeStyle = "rgba(255,255,255,0.12)";
+            g.lineWidth = 1 * dim.ratio;
+            g.beginPath();
+            g.moveTo(pad.left, baseY);
+            g.lineTo(pad.left + plotW, baseY);
+            g.stroke();
+
+            for (let i = 0; i < n; i++) {
+              const d = Number(series[i].deltaCore || 0);
+              const x0 = pad.left + (i / n) * plotW;
+              const x1 = pad.left + ((i + 1) / n) * plotW;
+              const barW = Math.max(1, x1 - x0);
+              const bh = clamp((d / maxAbs) * (deltaH * 0.45), -deltaH * 0.45, deltaH * 0.45);
+              g.fillStyle = d >= 0 ? "rgba(61,220,151,0.65)" : "rgba(255,107,107,0.65)";
+              const y0 = bh >= 0 ? baseY - bh : baseY;
+              g.fillRect(x0, y0, barW, Math.abs(bh));
+            }
+
+            // Label
+            g.fillStyle = "rgba(157,176,218,0.7)";
+            g.textBaseline = "alphabetic";
+            g.fillText("Δ/epoch", pad.left, pad.top + plotH + deltaH - 6 * dim.ratio);
+          }
+        }
+
+        function updatePanels(state) {
+          const series = state.series || [];
+          if (series.length === 0) return;
+          const idx = clamp(state.idx, 0, series.length - 1);
+          const row = series[idx];
+          const params = state.result?.params || {};
+          const baselines = state.result?.baselines || buildBaselines();
+
+          const derived = computeDerivedStep(row, params, baselines);
+          const ctx = row.context || {};
+          const kind = String(ctx.kind || "AWAKE");
+          const sleepStage0 = ctx.kind === "SLEEP" ? String(ctx.sleepStage || "") : "";
+
+          const heat = Boolean(row.temperature?.heatLikely);
+          const tempMode = String(row.temperature?.mode ?? "missing");
+
+          mkKV(ui.kvNow, [
+            { k: "i", v: String(idx) },
+            { k: "time", v: row.iso ? row.iso.replace("T", " ").replace(".000Z", "Z") : "null" },
+            { k: "context", v: kind + (sleepStage0 ? ":" + sleepStage0 : "") },
+            { k: "BB", v: `${fmt(row.bb, 2)} → ${fmt(row.bbNext, 2)}` },
+            { k: "Comfort", v: fmt(row.comfortScore, 1), className: row.comfortScore >= 70 ? "ok" : row.comfortScore >= 45 ? "warn" : "bad" },
+            { k: "Fatigue", v: fmt(row.fatigueScore, 1), className: row.fatigueScore <= 35 ? "ok" : row.fatigueScore <= 60 ? "warn" : "bad" },
+            { k: "HR / HRV", v: `${row.input?.hr ?? "null"} bpm / ${row.input?.hrv ?? "null"} ms` },
+            { k: "SpO₂ / RR", v: `${row.input?.spo2 ?? "null"}% / ${row.input?.rr ?? "null"} brpm` },
+            { k: "TempΔ / Mode", v: `${fmt(row.temperature?.deltaC, 2)}C / ${tempMode}${heat ? " (heatLikely)" : ""}`, className: heat ? "bad" : "v" },
+            { k: "Charge/h", v: fmt(row.chargePerHour, 2) },
+            { k: "Drain/h", v: fmt(row.drainPerHour, 2) },
+            { k: "Δ (clipped)", v: fmt(row.deltaCore, 2), className: row.deltaCore >= 0 ? "ok" : "bad" },
+            { k: "Confidence", v: fmt(row.confidence, 3) },
+          ]);
+
+          const sleep = derived.sleepExplainer;
+          const isSleep = kind === "SLEEP";
+          const anomPenalty = clamp(sleep.anomPenalty, 0, 1);
+
+          const rec = row.chargeComponents || {};
+          const cal = row.calmRecovery || {};
+
+          function fmtWeights(obj) {
+            if (!obj || typeof obj !== "object") return "null";
+            const parts = [];
+            for (const [k, v] of Object.entries(obj)) {
+              if (!Number.isFinite(Number(v))) continue;
+              parts.push(`${k}=${fmt(Number(v), 2)}`);
+            }
+            return parts.length ? parts.join(" ") : "null";
+          }
+
+          mkKV(ui.kvMath, [
+            { k: "sat(BB)", v: fmt(derived.sat, 3) },
+            { k: "wCharge", v: fmtWeights(row.weights?.charge) },
+            { k: "gate(charge)", v: `scale=${fmt(derived.chargeGate.groupScale, 3)} (q=${fmt(derived.chargeGate.groupQuality, 3)})` },
+            { k: "rawCharge/h", v: fmt(derived.rawChargePerHour, 2) },
+            { k: "charge/h", v: `${fmt(derived.chargePerHourCore, 2)} + extra ${fmt(derived.chargePerHourExtra, 2)}` },
+            { k: "wDrain", v: fmtWeights(row.weights?.drain) },
+            { k: "gate(drain)", v: `scale=${fmt(derived.drainGate.groupScale, 3)} (q=${fmt(derived.drainGate.groupQuality, 3)})` },
+            { k: "rawDrain/h", v: fmt(derived.rawDrainPerHour, 2) },
+            { k: "drain/h", v: fmt(derived.drainPerHour, 2) },
+            { k: "Δ raw", v: fmt(derived.rawDelta, 2) },
+            { k: "Δ clip", v: `±${fmt(derived.maxDelta, 2)} (maxDeltaPerHour×dt)` },
+            { k: "Δ core", v: fmt(derived.deltaCore, 2), className: derived.deltaCore >= 0 ? "ok" : "bad" },
+            { k: "sleepRecovery", v: fmt(rec.sleep, 3) + (isSleep ? "" : " (not SLEEP)") },
+            { k: "stageFactor", v: isSleep ? fmt(sleep.stFactor, 2) : "—" },
+            { k: "zHRV", v: sleep.zHrv === null ? "null" : fmt(sleep.zHrv, 2) },
+            { k: "autonomic", v: fmt(sleep.autonomicFactor, 2) },
+            { k: "anomPenalty", v: fmt(anomPenalty, 3) + ` (anomIndex=${fmt(sleep.anomIndex, 2)})`, className: anomPenalty >= 0.85 ? "ok" : anomPenalty >= 0.65 ? "warn" : "bad" },
+            { k: "tempOnset", v: `${fmt(sleep.onsetIdx, 2)} → ×${fmt(sleep.onsetMult, 3)}` },
+            { k: "calmRec", v: `index=${fmt(cal.index ?? 0, 3)} extra/h=${fmt(rec.calmRecoveryChargePerHour ?? 0, 2)} stress×${fmt(cal.stressSuppressionFactor ?? 1, 3)}` },
+          ]);
+        }
+
+        const state = {
+          scenario: "good",
+          epochs: [],
+          result: null,
+          series: [],
+          idx: 0,
+          playing: false,
+          rafId: null,
+          lastT: 0,
+          acc: 0,
+        };
+
+        function buildScenarioSegments(name) {
+          if (name === "fragmented") return segmentsFragmentedSleep();
+          if (name === "hot") return segmentsHotStress();
+          return segmentsGoodSleep();
+        }
+
+        function isSleepType(type) {
+          const t = String(type || "");
+          return t.startsWith("sleep_");
+        }
+
+        function ensureEpochDefaults(segments) {
+          // Normalize for buildEpochsFromSegments: we keep "type" but map non-sleep types by omitting sleepStage.
+          return segments.map((s) => {
+            const type = String(s.type || "");
+            if (isSleepType(type)) return s;
+            // Map awake/rest/light/active/workout to plain segments (no sleepStage)
+            return { ...s, type: type };
+          });
+        }
+
+        function recompute() {
+          const user = readUserParams();
+          ui.epochMinutes.value = String(user.epochMinutes);
+          ui.initialBB.value = String(user.initialBB);
+
+          const segs = ensureEpochDefaults(buildScenarioSegments(state.scenario));
+          const epochs = buildEpochsFromSegments(segs, user.epochMinutes, `scenario:${state.scenario}`);
+
+          // Re-classify non-sleep types: if user passed type as "awake"/"light"/"active" we don't set sleepStage,
+          // but we do want clear activity signals.
+          // (Epochs already have steps/energy; so classification is signal-driven.)
+
+          const baselines = buildBaselines();
+          const params = {
+            baseSleepChargePerHour: user.baseSleepChargePerHour,
+            maxDeltaPerHour: user.maxDeltaPerHour,
+          };
+
+          const result = window.BodyBatteryModel.computeSeries({
+            epochMinutes: user.epochMinutes,
+            initialBB: user.initialBB,
+            baselines,
+            params,
+            epochs,
+          });
+
+          state.epochs = epochs;
+          state.result = result;
+          state.series = result.series || [];
+          state.idx = clamp(state.idx, 0, Math.max(0, state.series.length - 1));
+          ui.scrub.max = String(Math.max(0, state.series.length - 1));
+          ui.scrub.value = String(state.idx);
+
+          drawTimeline(state);
+          drawChart(state);
+          updatePanels(state);
+        }
+
+        function stop() {
+          state.playing = false;
+          if (state.rafId) cancelAnimationFrame(state.rafId);
+          state.rafId = null;
+          state.lastT = 0;
+          state.acc = 0;
+          ui.btnPlay.textContent = "播放";
+        }
+
+        function start() {
+          if (state.series.length === 0) return;
+          state.playing = true;
+          ui.btnPlay.textContent = "暂停";
+          state.lastT = 0;
+          state.acc = 0;
+
+          function loop(t) {
+            if (!state.playing) return;
+            if (!state.lastT) state.lastT = t;
+            const dt = Math.max(0, (t - state.lastT) / 1000);
+            state.lastT = t;
+
+            const speed = clamp(Number(ui.speed.value || 6), 0.5, 20);
+            state.acc += dt * speed;
+            while (state.acc >= 1) {
+              state.acc -= 1;
+              state.idx += 1;
+              if (state.idx >= state.series.length) {
+                state.idx = state.series.length - 1;
+                stop();
+                break;
+              }
+              ui.scrub.value = String(state.idx);
+            }
+
+            drawTimeline(state);
+            drawChart(state);
+            updatePanels(state);
+            state.rafId = requestAnimationFrame(loop);
+          }
+
+          state.rafId = requestAnimationFrame(loop);
+        }
+
+        function togglePlay() {
+          if (state.playing) stop();
+          else start();
+        }
+
+        function jumpTo(i) {
+          state.idx = clamp(Number(i), 0, Math.max(0, state.series.length - 1));
+          ui.scrub.value = String(state.idx);
+          drawTimeline(state);
+          drawChart(state);
+          updatePanels(state);
+        }
+
+        function setScenario(name) {
+          state.scenario = name;
+          stop();
+          state.idx = 0;
+          recompute();
+        }
+
+        ui.btnGood.addEventListener("click", () => setScenario("good"));
+        ui.btnFragmented.addEventListener("click", () => setScenario("fragmented"));
+        ui.btnHot.addEventListener("click", () => setScenario("hot"));
+        ui.btnPlay.addEventListener("click", togglePlay);
+        ui.btnReset.addEventListener("click", () => {
+          stop();
+          jumpTo(0);
+        });
+        ui.btnPrev.addEventListener("click", () => {
+          stop();
+          jumpTo(state.idx - 1);
+        });
+        ui.btnNext.addEventListener("click", () => {
+          stop();
+          jumpTo(state.idx + 1);
+        });
+        ui.scrub.addEventListener("input", (e) => {
+          stop();
+          jumpTo(e.target.value);
+        });
+
+        function onParamsChange() {
+          stop();
+          recompute();
+        }
+
+        ui.epochMinutes.addEventListener("change", onParamsChange);
+        ui.initialBB.addEventListener("change", onParamsChange);
+        ui.baseSleepChargePerHour.addEventListener("change", onParamsChange);
+        ui.maxDeltaPerHour.addEventListener("change", onParamsChange);
+        ui.toggleComfort.addEventListener("change", () => {
+          drawChart(state);
+        });
+        ui.toggleFatigue.addEventListener("change", () => {
+          drawChart(state);
+        });
+        ui.toggleDelta.addEventListener("change", () => {
+          drawChart(state);
+        });
+
+        ui.speed.addEventListener("input", () => {
+          ui.speedLabel.textContent = String(ui.speed.value);
+        });
+        ui.speedLabel.textContent = String(ui.speed.value);
+
+        window.addEventListener("resize", () => {
+          drawTimeline(state);
+          drawChart(state);
+        });
+
+        // First render
+        recompute();
+      })();
+    </script>
+  </body>
+</html>
