@@ -310,6 +310,23 @@
         font-size: 12px;
       }
 
+      .metric-grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+        gap: 8px 12px;
+        margin-top: 10px;
+      }
+
+      .metric-grid label.checkbox {
+        margin: 0;
+      }
+
+      .metric-grid input[type="checkbox"] {
+        width: auto;
+        margin: 0;
+        padding: 0;
+      }
+
       .chart-tooltip {
         position: absolute;
         z-index: 10;
@@ -720,11 +737,21 @@
                   <option value="power">Power (W)</option>
                 </select>
               </label>
+              <label class="checkbox"><input id="chartBottomMulti" type="checkbox" />Multi</label>
               <label class="checkbox"><input id="chartShowSleep" type="checkbox" checked />Sleep</label>
               <label class="checkbox"><input id="chartShowEvents" type="checkbox" checked />Events</label>
               <button id="chartResetZoom">Reset zoom</button>
             </div>
           </div>
+          <details id="chartBottomMetricsPanel" hidden>
+            <summary>Bottom metrics (multi)</summary>
+            <div class="metric-grid" id="chartBottomMetricsWrap"></div>
+            <div class="actions" style="margin-top: 10px">
+              <button id="chartBottomMetricsCommon" type="button">Common set</button>
+              <button id="chartBottomMetricsClear" type="button" class="danger">Clear</button>
+            </div>
+            <div class="hint" style="margin-top: 6px">Tip: 2–5 metrics is recommended; too many will be cramped.</div>
+          </details>
           <div class="chart-wrap" id="chartWrap">
             <canvas id="chart" width="980" height="340"></canvas>
             <div id="chartTooltip" class="chart-tooltip" hidden></div>

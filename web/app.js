@@ -15,6 +15,8 @@
         showSleep: true,
         showEvents: true,
         bottomMetric: "chargeDrain",
+        bottomMulti: false,
+        bottomMetrics: ["chargeDrain", "loadPerHour", "hr"],
       },
       view: { minX: null, maxX: null },
       hover: { idx: null, px: null },
@@ -596,6 +598,207 @@
     });
   }
 
+  const BOTTOM_METRICS = [
+    { key: "chargeDrain", label: "Charge/Drain (per hour)", kind: "chargeDrain" },
+    { key: "netPerHour", label: "Net (BB/h)", kind: "line", color: "rgba(207, 224, 255, 0.85)", digits: 1, zeroLine: true },
+    { key: "chargePerHour", label: "Charge (BB/h)", kind: "line", color: "rgba(122, 162, 255, 0.85)", digits: 1 },
+    { key: "drainPerHour", label: "Drain (BB/h)", kind: "line", color: "rgba(255, 107, 107, 0.85)", digits: 1 },
+    { key: "delta", label: "Δ per epoch (BB)", kind: "line", color: "rgba(207, 224, 255, 0.85)", digits: 2, zeroLine: true },
+    { key: "confidence", label: "Confidence", kind: "line", color: "rgba(207, 224, 255, 0.85)", digits: 2, range: { min: 0, max: 1 }, dash: [5, 4] },
+
+    // Vitals
+    { key: "hr", label: "Heart rate (bpm)", kind: "line", color: "rgba(255, 183, 77, 0.95)", digits: 0 },
+    { key: "hrv", label: "HRV (ms)", kind: "line", color: "rgba(166, 122, 255, 0.95)", digits: 0 },
+    { key: "spo2", label: "SpO₂ (%)", kind: "line", color: "rgba(80, 220, 255, 0.95)", digits: 1 },
+    { key: "rr", label: "Resp rate (brpm)", kind: "line", color: "rgba(255, 153, 204, 0.95)", digits: 1 },
+    { key: "tempDelta", label: "Temp Δ (C)", kind: "line", color: "rgba(255, 92, 138, 0.95)", digits: 2, zeroLine: true },
+
+    // Activity / workout curves
+    { key: "steps", label: "Steps/min", kind: "line", color: "rgba(61, 220, 151, 0.95)", digits: 0 },
+    { key: "kcalPerMin", label: "Energy (kcal/min)", kind: "line", color: "rgba(255, 223, 122, 0.95)", digits: 2 },
+    { key: "power", label: "Power (W)", kind: "line", color: "rgba(255, 107, 107, 0.95)", digits: 0 },
+    { key: "activityIntensity01", label: "Activity intensity (0-1)", kind: "line", color: "rgba(61, 220, 151, 0.95)", digits: 2, range: { min: 0, max: 1 } },
+    { key: "loadPerHour", label: "Load drain (BB/h)", kind: "line", color: "rgba(255, 107, 107, 0.95)", digits: 1 },
+
+    // Drain components
+    { key: "stressPerHour", label: "Stress drain (BB/h)", kind: "line", color: "rgba(255, 183, 77, 0.95)", digits: 1 },
+    { key: "anomPerHour", label: "Anom drain (BB/h)", kind: "line", color: "rgba(255, 92, 138, 0.95)", digits: 1 },
+    { key: "anomIndex", label: "Anom index", kind: "line", color: "rgba(255, 92, 138, 0.95)", digits: 2 },
+
+    // Recovery components (reference)
+    { key: "sleepRecovery", label: "Sleep recovery idx", kind: "line", color: "rgba(122, 162, 255, 0.95)", digits: 2 },
+    { key: "restRecovery", label: "Rest recovery idx", kind: "line", color: "rgba(61, 220, 151, 0.95)", digits: 2 },
+    { key: "mindRecovery", label: "Mind recovery idx", kind: "line", color: "rgba(166, 122, 255, 0.95)", digits: 2 },
+    { key: "calmChargePerHour", label: "CalmRec extra (BB/h)", kind: "line", color: "rgba(122, 162, 255, 0.65)", digits: 2 },
+    { key: "sleepArchitectureFactor", label: "Sleep arch factor", kind: "line", color: "rgba(122, 162, 255, 0.75)", digits: 2, range: { min: 0.55, max: 1.25 } },
+  ];
+
+  const BOTTOM_METRIC_BY_KEY = new Map(BOTTOM_METRICS.map((m) => [m.key, m]));
+
+  function computeActivityIntensity01(row, baselines) {
+    const dtMin = Number(row?.dtMinutes ?? 0) || 0;
+    if (dtMin <= 0) return null;
+
+    const stepsPerMin = Number(row?.input?.steps ?? 0) / dtMin;
+    const kcalPerMin = Number(row?.input?.activeEnergy ?? 0) / dtMin;
+    const power = row?.input?.power ?? null;
+
+    const stepsIdx = clamp(stepsPerMin / 150, 0, 1);
+    const energyIdx = clamp(kcalPerMin / 20, 0, 1);
+
+    const ftp = Number(baselines?.ftpW ?? 220);
+    const powerIdx =
+      power === null || power === undefined || !Number.isFinite(Number(power)) || !Number.isFinite(ftp) || ftp <= 0
+        ? 0
+        : clamp(Number(power) / ftp, 0, 1.6) / 1.6;
+
+    return clamp(Math.max(stepsIdx, energyIdx, powerIdx), 0, 1);
+  }
+
+  function getBottomMetricValue(row, metricKey, baselines) {
+    switch (metricKey) {
+      case "confidence":
+        return row.confidence;
+      case "hr":
+        return row.input?.hr ?? null;
+      case "hrv":
+        return row.input?.hrv ?? null;
+      case "spo2":
+        return row.input?.spo2 ?? null;
+      case "rr":
+        return row.input?.rr ?? null;
+      case "tempDelta":
+        return row.temperature?.deltaC ?? null;
+      case "steps": {
+        const dtMin = Number(row.dtMinutes ?? 0) || 0;
+        return dtMin > 0 ? Number(row.input?.steps ?? 0) / dtMin : null;
+      }
+      case "kcalPerMin": {
+        const dtMin = Number(row.dtMinutes ?? 0) || 0;
+        return dtMin > 0 ? Number(row.input?.activeEnergy ?? 0) / dtMin : null;
+      }
+      case "power":
+        return row.input?.power ?? null;
+      case "activityIntensity01":
+        return computeActivityIntensity01(row, baselines);
+      case "loadPerHour":
+        return row.drainComponents?.loadPerHour ?? null;
+      case "stressPerHour":
+        return row.drainComponents?.stressPerHour ?? null;
+      case "anomPerHour":
+        return row.drainComponents?.anomPerHour ?? null;
+      case "anomIndex":
+        return row.drainComponents?.anomIndex ?? null;
+      case "sleepRecovery":
+        return row.chargeComponents?.sleep ?? null;
+      case "restRecovery":
+        return row.chargeComponents?.rest ?? null;
+      case "mindRecovery":
+        return row.chargeComponents?.mind ?? null;
+      case "calmChargePerHour":
+        return row.chargeComponents?.calmRecoveryChargePerHour ?? null;
+      case "sleepArchitectureFactor":
+        return row.sleepArchitectureFactor ?? null;
+      case "netPerHour":
+        return Number(row.chargePerHour ?? 0) - Number(row.drainPerHour ?? 0);
+      case "chargePerHour":
+        return row.chargePerHour ?? null;
+      case "drainPerHour":
+        return row.drainPerHour ?? null;
+      case "delta":
+        return row.deltaCore ?? null;
+      default:
+        return null;
+    }
+  }
+
+  function normalizeBottomMetricKeys(keys, fallbackKey) {
+    const out = [];
+    const seen = new Set();
+    for (const k of Array.isArray(keys) ? keys : []) {
+      const key = String(k || "");
+      if (!key || seen.has(key) || !BOTTOM_METRIC_BY_KEY.has(key)) continue;
+      seen.add(key);
+      out.push(key);
+    }
+    if (out.length > 0) return out;
+    const fb = String(fallbackKey || "chargeDrain");
+    return BOTTOM_METRIC_BY_KEY.has(fb) ? [fb] : ["chargeDrain"];
+  }
+
+  function setBottomMetricsUiEnabled(enabled) {
+    const multiPanel = $("chartBottomMetricsPanel");
+    if (!multiPanel) return;
+    for (const el of multiPanel.querySelectorAll("input,button,select,textarea")) {
+      if (el && el.id === "chartBottomMetricsPanel") continue;
+      el.disabled = !enabled;
+    }
+  }
+
+  function getBottomMetricsFromUi() {
+    const wrap = $("chartBottomMetricsWrap");
+    if (!wrap) return [];
+    const keys = [];
+    for (const input of wrap.querySelectorAll("input[type='checkbox'][data-metric]")) {
+      if (input.checked) keys.push(String(input.value));
+    }
+    return keys;
+  }
+
+  function setBottomMetricsInUi(keys) {
+    const want = new Set((Array.isArray(keys) ? keys : []).map((k) => String(k)));
+    const wrap = $("chartBottomMetricsWrap");
+    if (!wrap) return;
+    for (const input of wrap.querySelectorAll("input[type='checkbox'][data-metric]")) {
+      input.checked = want.has(String(input.value));
+    }
+  }
+
+  function initBottomMetricControls() {
+    const opts = state.chart.options;
+    const single = $("chartBottomMetric");
+    if (single) {
+      const prev = String(single.value || opts.bottomMetric || "chargeDrain");
+      single.textContent = "";
+      for (const m of BOTTOM_METRICS) {
+        const opt = document.createElement("option");
+        opt.value = m.key;
+        opt.textContent = m.label;
+        single.appendChild(opt);
+      }
+      single.value = BOTTOM_METRIC_BY_KEY.has(prev) ? prev : "chargeDrain";
+      opts.bottomMetric = String(single.value || "chargeDrain");
+    }
+
+    const wrap = $("chartBottomMetricsWrap");
+    if (wrap) {
+      wrap.textContent = "";
+      for (const m of BOTTOM_METRICS) {
+        const label = document.createElement("label");
+        label.className = "checkbox";
+
+        const input = document.createElement("input");
+        input.type = "checkbox";
+        input.value = m.key;
+        input.setAttribute("data-metric", m.key);
+
+        const text = document.createElement("span");
+        text.textContent = m.label;
+
+        label.appendChild(input);
+        label.appendChild(text);
+        wrap.appendChild(label);
+      }
+      setBottomMetricsInUi(opts.bottomMetrics);
+    }
+
+    const multi = $("chartBottomMulti");
+    if (multi) multi.checked = Boolean(opts.bottomMulti);
+    const panel = $("chartBottomMetricsPanel");
+    if (panel) panel.hidden = !Boolean(opts.bottomMulti);
+    setBottomMetricsUiEnabled(Boolean(opts.bottomMulti));
+  }
+
   function readChartOptionsFromUI() {
     const opts = state.chart.options;
     const reserve = $("chartShowReserve");
@@ -604,13 +807,28 @@
     const sleep = $("chartShowSleep");
     const events = $("chartShowEvents");
     const bottom = $("chartBottomMetric");
+    const bottomMulti = $("chartBottomMulti");
 
     if (reserve) opts.showReserve = Boolean(reserve.checked);
     if (comfort) opts.showComfort = Boolean(comfort.checked);
     if (fatigue) opts.showFatigue = Boolean(fatigue.checked);
     if (sleep) opts.showSleep = Boolean(sleep.checked);
     if (events) opts.showEvents = Boolean(events.checked);
+
+    opts.bottomMulti = Boolean(bottomMulti?.checked);
     if (bottom && bottom.value) opts.bottomMetric = String(bottom.value);
+
+    if (bottom) bottom.disabled = opts.bottomMulti;
+    const panel = $("chartBottomMetricsPanel");
+    if (panel) panel.hidden = !opts.bottomMulti;
+    setBottomMetricsUiEnabled(opts.bottomMulti);
+
+    let keys = opts.bottomMulti ? getBottomMetricsFromUi() : [opts.bottomMetric];
+    if (opts.bottomMulti && (!Array.isArray(keys) || keys.length === 0)) {
+      setBottomMetricsInUi([opts.bottomMetric]);
+      keys = getBottomMetricsFromUi();
+    }
+    opts.bottomMetrics = normalizeBottomMetricKeys(keys, opts.bottomMetric);
 
     if (!opts.showReserve && !opts.showComfort && !opts.showFatigue) {
       opts.showReserve = true;
@@ -692,10 +910,18 @@
 
     const hr = row.input?.hr;
     const hrv = row.input?.hrv;
+    const spo2 = row.input?.spo2;
+    const rr = row.input?.rr;
     const power = row.input?.power;
+    const tempDelta = row.temperature?.deltaC;
+    const loadPerHour = row.drainComponents?.loadPerHour;
+    const stressPerHour = row.drainComponents?.stressPerHour;
+    const anomPerHour = row.drainComponents?.anomPerHour;
+    const sleepArchFactor = row.sleepArchitectureFactor;
     const dtMin = Number(row.dtMinutes ?? 0) || 0;
     const stepsPerMin = dtMin > 0 ? Number(row.input?.steps ?? 0) / dtMin : null;
     const kcalPerMin = dtMin > 0 ? Number(row.input?.activeEnergy ?? 0) / dtMin : null;
+    const intensity01 = computeActivityIntensity01(row, state.lastResult?.baselines ?? null);
 
     const netPerHour = Number(row.chargePerHour ?? 0) - Number(row.drainPerHour ?? 0);
 
@@ -711,9 +937,17 @@
       ["Drain/h", fmt(row.drainPerHour, 1)],
       ["HR", fmtInt(hr)],
       ["HRV", fmtInt(hrv)],
+      ["SpO₂", fmt(spo2, 1)],
+      ["RR", fmt(rr, 1)],
       ["Steps/min", fmt(stepsPerMin, 1)],
       ["kcal/min", fmt(kcalPerMin, 2)],
       ["Power", fmtInt(power)],
+      ["Intensity(0-1)", fmt(intensity01, 2)],
+      ["Load/h", fmt(loadPerHour, 1)],
+      ["Stress/h", fmt(stressPerHour, 1)],
+      ["Anom/h", fmt(anomPerHour, 1)],
+      ["SleepArch", fmt(sleepArchFactor, 2)],
+      ["TempΔ", fmt(tempDelta, 2)],
     );
 
     let gridHtml = "";
@@ -805,14 +1039,15 @@
     const plotH = Math.max(1, h - padT - padB);
 
     const gap = 12;
-    const bottomMetric = String(opts.bottomMetric || "chargeDrain");
-    let bottomH = Math.max(84, Math.round(plotH * 0.32));
-    let topH = Math.max(120, plotH - bottomH - gap);
-    if (topH + bottomH + gap > plotH) bottomH = Math.max(60, plotH - topH - gap);
-    if (plotH < 210) {
-      bottomH = Math.max(64, Math.round(plotH * 0.36));
-      topH = Math.max(110, plotH - bottomH - gap);
-    }
+    const bottomMetricKeys = normalizeBottomMetricKeys(opts.bottomMetrics, opts.bottomMetric || "chargeDrain");
+    const bottomMetricCount = bottomMetricKeys.length;
+    const topMinH = plotH < 210 ? 110 : 120;
+    const bottomMinH = plotH < 210 ? 64 : 84;
+    const bottomFrac = bottomMetricCount <= 1 ? 0.32 : Math.min(0.62, 0.26 + 0.08 * bottomMetricCount);
+
+    const bottomHMax = Math.max(bottomMinH, plotH - topMinH - gap);
+    let bottomH = clamp(Math.round(plotH * bottomFrac), bottomMinH, bottomHMax);
+    let topH = plotH - bottomH - gap;
 
     const topPanel = { x: padL, y: padT, w: plotW, h: topH };
     const bottomPanel = { x: padL, y: padT + topH + gap, w: plotW, h: bottomH };
@@ -1023,63 +1258,36 @@
     ctx.fillText("0", 18, yScore(0) + 4);
     ctx.restore();
 
-    // Bottom panel
-    const bottomMinMax = () => {
-      let minV = Infinity;
-      let maxV = -Infinity;
-      const upd = (v) => {
-        if (!Number.isFinite(v)) return;
-        minV = Math.min(minV, v);
-        maxV = Math.max(maxV, v);
-      };
-      for (let i = i0; i <= i1; i++) upd(getBottomValue(series[i], bottomMetric));
-      if (minV === Infinity || maxV === -Infinity) return null;
-      return { minV, maxV };
-    };
+    // Bottom panel(s)
+    const baselines = state.lastResult?.baselines ?? null;
+    const metrics = bottomMetricKeys;
+    const metricCount = metrics.length;
+    const innerGap = metricCount > 1 ? 8 : 0;
+    const totalGap = innerGap * Math.max(0, metricCount - 1);
+    const subH = (bottomPanel.h - totalGap) / Math.max(1, metricCount);
 
-    function getBottomValue(r, metric) {
-      switch (metric) {
-        case "confidence":
-          return r.confidence;
-        case "hr":
-          return r.input?.hr ?? null;
-        case "hrv":
-          return r.input?.hrv ?? null;
-        case "steps": {
-          const dtMin = Number(r.dtMinutes ?? 0) || 0;
-          return dtMin > 0 ? Number(r.input?.steps ?? 0) / dtMin : null;
-        }
-        case "power":
-          return r.input?.power ?? null;
-        case "chargeDrain":
-        default:
-          return null;
-      }
-    }
-
-    const drawBottomGridLine = (yy) => {
+    const drawBottomGridLine = (panel, yy) => {
       ctx.beginPath();
-      ctx.moveTo(bottomPanel.x, yy);
-      ctx.lineTo(bottomPanel.x + bottomPanel.w, yy);
+      ctx.moveTo(panel.x, yy);
+      ctx.lineTo(panel.x + panel.w, yy);
       ctx.stroke();
     };
 
-    if (bottomMetric === "chargeDrain") {
+    const drawChargeDrainPanel = (panel) => {
       let maxAbs = 0;
       for (let i = i0; i <= i1; i++) {
         maxAbs = Math.max(maxAbs, Number(series[i].chargePerHour ?? 0) || 0, Number(series[i].drainPerHour ?? 0) || 0);
       }
       maxAbs = Math.max(1, maxAbs);
-      const yRate = (v) =>
-        bottomPanel.y + (maxAbs - clamp(v, -maxAbs, maxAbs)) * (bottomPanel.h / (2 * maxAbs));
+      const yRate = (v) => panel.y + (maxAbs - clamp(v, -maxAbs, maxAbs)) * (panel.h / (2 * maxAbs));
       const yZero = yRate(0);
 
       ctx.save();
       ctx.strokeStyle = "rgba(36, 50, 82, 0.55)";
       ctx.lineWidth = 1;
-      drawBottomGridLine(yRate(maxAbs));
-      drawBottomGridLine(yZero);
-      drawBottomGridLine(yRate(-maxAbs));
+      drawBottomGridLine(panel, yRate(maxAbs));
+      drawBottomGridLine(panel, yZero);
+      drawBottomGridLine(panel, yRate(-maxAbs));
       ctx.restore();
 
       ctx.save();
@@ -1088,7 +1296,7 @@
         const cph = Number(series[i].chargePerHour ?? 0) || 0;
         if (cph <= 0) continue;
         const x0 = xOf(xs[i]);
-        const x1 = i < i1 ? xOf(xs[i + 1]) : bottomPanel.x + bottomPanel.w;
+        const x1 = i < i1 ? xOf(xs[i + 1]) : panel.x + panel.w;
         const bw = Math.max(1, (x1 - x0) * 0.9);
         const y = yRate(cph);
         ctx.fillRect(x0, y, bw, yZero - y);
@@ -1098,69 +1306,111 @@
         const dph = Number(series[i].drainPerHour ?? 0) || 0;
         if (dph <= 0) continue;
         const x0 = xOf(xs[i]);
-        const x1 = i < i1 ? xOf(xs[i + 1]) : bottomPanel.x + bottomPanel.w;
+        const x1 = i < i1 ? xOf(xs[i + 1]) : panel.x + panel.w;
         const bw = Math.max(1, (x1 - x0) * 0.9);
         const y = yRate(-dph);
         ctx.fillRect(x0, yZero, bw, y - yZero);
       }
       ctx.restore();
 
+      const fontPx = panel.h < 70 ? 10 : 12;
       ctx.save();
       ctx.fillStyle = "rgba(157, 176, 218, 0.95)";
-      ctx.font = "12px ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace";
+      ctx.font = `${fontPx}px ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace`;
       ctx.fillText(`+${Math.round(maxAbs)}`, 6, yRate(maxAbs) + 4);
       ctx.fillText("0", 14, yZero + 4);
       ctx.fillText(`-${Math.round(maxAbs)}`, 6, yRate(-maxAbs) + 4);
-      ctx.fillText("Charge/Drain per hour", bottomPanel.x + 6, bottomPanel.y + 14);
+      ctx.fillText("Charge/Drain", panel.x + 6, panel.y + 14);
       ctx.restore();
-    } else {
-      const mm = bottomMinMax();
-      const minV = mm ? mm.minV : 0;
-      const maxV = mm ? mm.maxV : 1;
-      const span = Math.max(1e-9, maxV - minV);
-      const pad = span * 0.08;
-      const v0 = bottomMetric === "confidence" ? 0 : minV - pad;
-      const v1 = bottomMetric === "confidence" ? 1 : maxV + pad;
-      const yOf = (v) => bottomPanel.y + (v1 - clamp(v, v0, v1)) * (bottomPanel.h / Math.max(1e-9, v1 - v0));
+    };
+
+    const drawLineMetricPanel = (panel, metricKey) => {
+      const def = BOTTOM_METRIC_BY_KEY.get(metricKey) || { label: metricKey, digits: 0, kind: "line" };
+
+      let minV = Infinity;
+      let maxV = -Infinity;
+      for (let i = i0; i <= i1; i++) {
+        const v = getBottomMetricValue(series[i], metricKey, baselines);
+        if (!Number.isFinite(v)) continue;
+        minV = Math.min(minV, v);
+        maxV = Math.max(maxV, v);
+      }
+
+      if (minV === Infinity || maxV === -Infinity) {
+        ctx.save();
+        ctx.fillStyle = "rgba(157, 176, 218, 0.95)";
+        ctx.font = "12px ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace";
+        ctx.fillText(`${def.label}: No data`, panel.x + 6, panel.y + 14);
+        ctx.restore();
+        return;
+      }
+
+      let v0 = minV;
+      let v1 = maxV;
+      if (def.range && Number.isFinite(def.range.min) && Number.isFinite(def.range.max) && def.range.max > def.range.min) {
+        v0 = def.range.min;
+        v1 = def.range.max;
+      } else {
+        const span = Math.max(1e-9, maxV - minV);
+        const pad = span * 0.08;
+        v0 = minV - pad;
+        v1 = maxV + pad;
+      }
+      if (!Number.isFinite(v0) || !Number.isFinite(v1) || v1 <= v0) {
+        v0 = minV - 1;
+        v1 = maxV + 1;
+      }
+
+      const yOf = (v) => panel.y + (v1 - clamp(v, v0, v1)) * (panel.h / Math.max(1e-9, v1 - v0));
 
       ctx.save();
       ctx.strokeStyle = "rgba(36, 50, 82, 0.55)";
       ctx.lineWidth = 1;
-      drawBottomGridLine(yOf(v0));
-      drawBottomGridLine(yOf((v0 + v1) / 2));
-      drawBottomGridLine(yOf(v1));
+      drawBottomGridLine(panel, yOf(v0));
+      drawBottomGridLine(panel, yOf((v0 + v1) / 2));
+      drawBottomGridLine(panel, yOf(v1));
+
+      if (def.zeroLine && v0 < 0 && v1 > 0) {
+        ctx.strokeStyle = "rgba(207, 224, 255, 0.22)";
+        ctx.setLineDash([4, 4]);
+        drawBottomGridLine(panel, yOf(0));
+      }
       ctx.restore();
 
       ctx.save();
-      ctx.strokeStyle = "rgba(207, 224, 255, 0.85)";
+      ctx.strokeStyle = def.color || "rgba(207, 224, 255, 0.85)";
       ctx.lineWidth = 1.6;
-      if (bottomMetric === "confidence") ctx.setLineDash([5, 4]);
+      if (Array.isArray(def.dash)) ctx.setLineDash(def.dash);
       ctx.beginPath();
-      drawLine(ctx, xs, series, i0, i1, xOf, yOf, (r) => getBottomValue(r, bottomMetric));
+      drawLine(ctx, xs, series, i0, i1, xOf, yOf, (r) => getBottomMetricValue(r, metricKey, baselines));
       ctx.stroke();
       ctx.restore();
 
-      const label =
-        bottomMetric === "confidence"
-          ? "Confidence"
-          : bottomMetric === "hr"
-            ? "Heart rate (bpm)"
-            : bottomMetric === "hrv"
-              ? "HRV (ms)"
-            : bottomMetric === "steps"
-              ? "Steps/min"
-              : bottomMetric === "power"
-                ? "Power (W)"
-                : "Metric";
+      const digits = Number.isFinite(def.digits) ? def.digits : 0;
+      const fontPx = panel.h < 70 ? 10 : 12;
 
       ctx.save();
       ctx.fillStyle = "rgba(157, 176, 218, 0.95)";
-      ctx.font = "12px ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace";
-      ctx.fillText(label, bottomPanel.x + 6, bottomPanel.y + 14);
-      ctx.fillText(Number(v1).toFixed(bottomMetric === "confidence" ? 1 : 0), 6, yOf(v1) + 4);
-      ctx.fillText(Number((v0 + v1) / 2).toFixed(bottomMetric === "confidence" ? 1 : 0), 6, yOf((v0 + v1) / 2) + 4);
-      ctx.fillText(Number(v0).toFixed(bottomMetric === "confidence" ? 1 : 0), 6, yOf(v0) + 4);
+      ctx.font = `${fontPx}px ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace`;
+      ctx.fillText(def.label, panel.x + 6, panel.y + 14);
+      ctx.fillText(Number(v1).toFixed(digits), 6, yOf(v1) + 4);
+      ctx.fillText(Number((v0 + v1) / 2).toFixed(digits), 6, yOf((v0 + v1) / 2) + 4);
+      ctx.fillText(Number(v0).toFixed(digits), 6, yOf(v0) + 4);
       ctx.restore();
+    };
+
+    for (let mi = 0; mi < metricCount; mi++) {
+      const key = metrics[mi];
+      const panel = {
+        x: bottomPanel.x,
+        y: bottomPanel.y + mi * (subH + innerGap),
+        w: bottomPanel.w,
+        h: subH,
+      };
+
+      const kind = BOTTOM_METRIC_BY_KEY.get(key)?.kind ?? "line";
+      if (kind === "chargeDrain") drawChargeDrainPanel(panel);
+      else drawLineMetricPanel(panel, key);
     }
 
     // X axis ticks
@@ -2290,6 +2540,7 @@
     });
 
     // Chart controls + interactions (Garmin-like hover/zoom)
+    initBottomMetricControls();
     readChartOptionsFromUI();
 
     const onChartOptChange = () => {
@@ -2304,6 +2555,19 @@
     $("chartShowSleep")?.addEventListener("change", onChartOptChange);
     $("chartShowEvents")?.addEventListener("change", onChartOptChange);
     $("chartBottomMetric")?.addEventListener("change", onChartOptChange);
+    $("chartBottomMulti")?.addEventListener("change", onChartOptChange);
+    $("chartBottomMetricsWrap")?.addEventListener("change", (e) => {
+      const t = e?.target;
+      if (t && t.matches && t.matches("input[type='checkbox'][data-metric]")) onChartOptChange();
+    });
+    $("chartBottomMetricsCommon")?.addEventListener("click", () => {
+      setBottomMetricsInUi(["chargeDrain", "activityIntensity01", "loadPerHour", "hr"]);
+      onChartOptChange();
+    });
+    $("chartBottomMetricsClear")?.addEventListener("click", () => {
+      setBottomMetricsInUi([]);
+      onChartOptChange();
+    });
 
     $("chartResetZoom")?.addEventListener("click", () => {
       resetChartZoom();
