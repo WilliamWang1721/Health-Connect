@@ -237,9 +237,11 @@
       imputeSpo2QualityAtFresh: 0.4,
       imputeRrQualityAtFresh: 0.4,
       imputeTempQualityAtFresh: 0.4,
-      // Sleep charging: lower duration weight; increase quality weight.
+      // Sleep charging:
+      // - SleepRecovery is now primarily driven by sleep architecture (deep vs core/light/awake ratio) + HRV.
+      // - HR and respiratory rate are auxiliary; duration + baseline + other signals are reference.
       sleepChargeDurationWeight: 0.8,
-      sleepRecoveryExponent: 1.6,
+      sleepRecoveryExponent: 1.2,
       baseSleepChargePerHour: 10.5,
       baseRestChargePerHour: 2,
       baseMindChargePerHour: 4,
@@ -739,7 +741,7 @@
 
     const sleepStageRaw = epoch.sleepStage ?? epoch.sleep ?? null;
     const sleepStage = sleepStageRaw === null || sleepStageRaw === undefined || sleepStageRaw === "" ? null : String(sleepStageRaw);
-    if (sleepStage && sleepStage !== "awake") {
+    if (sleepStage) {
       return { kind: "SLEEP", sleepStage };
     }
 
@@ -894,12 +896,133 @@
   function sleepStageFactor(sleepStage) {
     if (!sleepStage) return 1;
     const s = String(sleepStage).toLowerCase();
-    if (s.includes("deep")) return 1.35;
+    // Fine-grained per-epoch modifier (small range); main driver is session-level architecture + HRV.
+    if (s.includes("deep")) return 1.05;
     if (s.includes("core") || s.includes("light")) return 1;
-    if (s.includes("rem")) return 0.85;
-    if (s.includes("awake")) return 0.15;
-    if (s.includes("inbed") || s.includes("in_bed")) return 0.25;
+    if (s.includes("rem")) return 0.95;
+    if (s.includes("awake")) return 0.05;
+    if (s.includes("inbed") || s.includes("in_bed")) return 0.15;
     return 1;
+  }
+
+  function sleepStageKind(sleepStage) {
+    if (!sleepStage) return null;
+    const s = String(sleepStage).toLowerCase();
+    if (s.includes("deep")) return "deep";
+    if (s.includes("core") || s.includes("light")) return "core";
+    if (s.includes("rem")) return "rem";
+    if (s.includes("awake")) return "awake";
+    if (s.includes("inbed") || s.includes("in_bed")) return "inbed";
+    return "core";
+  }
+
+  function computeSleepArchitectureFactor(stageMinutes, totalMinutes) {
+    const total = Math.max(0, Number(totalMinutes) || 0);
+    if (!Number.isFinite(total) || total <= 0) return 1;
+
+    const deep = Math.max(0, Number(stageMinutes?.deep ?? 0) || 0);
+    const awakeLike =
+      Math.max(0, Number(stageMinutes?.awake ?? 0) || 0) + Math.max(0, Number(stageMinutes?.inbed ?? 0) || 0);
+
+    const asleep = Math.max(0, total - awakeLike);
+    const asleepFrac = clamp(asleep / total, 0, 1);
+    const deepFracAsleep = asleep <= 1e-6 ? 0 : clamp(deep / asleep, 0, 1);
+
+    // References (order-of-magnitude guidance; varies by age/sex):
+    // - StatPearls/NCBI Bookshelf "Physiology, Sleep Stages": N3 ~ 25% of sleep; REM ~ 25%.
+    // - PSG meta-analyses: normative sleep efficiency decreases with age (use as a soft, non-diagnostic prior).
+    const efficiencyScore01 = clamp((asleepFrac - 0.85) / 0.1, 0, 1);
+    const deepScore01 = clamp((deepFracAsleep - 0.1) / 0.15, 0, 1);
+
+    // Architecture factor (main driver): deep ratio + low fragmentation.
+    // Core/light/restful sleep without deep is still beneficial, but deep increases efficiency.
+    const factor = 0.65 + 0.3 * efficiencyScore01 + 0.3 * deepScore01;
+    return clamp(factor, 0.55, 1.25);
+  }
+
+  function buildSleepArchitectureFactorByEpoch(timeline, maxWakeGapMinutes) {
+    const n = Array.isArray(timeline) ? timeline.length : 0;
+    const out = { factorOfEpoch: new Array(n).fill(null), sessions: [] };
+    if (n === 0) return out;
+
+    const MAX_WAKE_GAP_MIN = clamp(Number(maxWakeGapMinutes ?? 90), 0, 720);
+
+    const sleepSegments = [];
+    for (let i = 0; i < n; i++) {
+      if (timeline[i]?.context0?.kind !== "SLEEP") continue;
+      const startIdx = i;
+      let endIdx = i;
+      while (endIdx + 1 < n && timeline[endIdx + 1]?.context0?.kind === "SLEEP") endIdx++;
+      sleepSegments.push({ startIdx, endIdx });
+      i = endIdx;
+    }
+
+    const sleepSessions = [];
+    if (sleepSegments.length > 0) {
+      let curr = null;
+      for (const seg of sleepSegments) {
+        if (!curr) {
+          curr = { startIdx: seg.startIdx, endIdx: seg.endIdx };
+          continue;
+        }
+
+        let gapMin = 0;
+        if (curr.endIdx + 1 < seg.startIdx) {
+          const gapStartMs = timeline[curr.endIdx + 1]?.tsMs ?? null;
+          const gapEndMs = timeline[seg.startIdx]?.tsMs ?? null;
+          if (Number.isFinite(gapStartMs) && Number.isFinite(gapEndMs) && gapEndMs >= gapStartMs) {
+            gapMin = (gapEndMs - gapStartMs) / 60000;
+          } else {
+            for (let i = curr.endIdx + 1; i < seg.startIdx; i++) gapMin += Number(timeline[i]?.dtMinutes ?? 0) || 0;
+          }
+        }
+
+        if (gapMin <= MAX_WAKE_GAP_MIN) {
+          curr.endIdx = seg.endIdx;
+        } else {
+          sleepSessions.push(curr);
+          curr = { startIdx: seg.startIdx, endIdx: seg.endIdx };
+        }
+      }
+      if (curr) sleepSessions.push(curr);
+    }
+
+    for (const s of sleepSessions) {
+      const stageMinutes = { deep: 0, core: 0, rem: 0, awake: 0, inbed: 0 };
+      let totalMin = 0;
+
+      for (let i = s.startIdx; i <= s.endIdx; i++) {
+        const ctx = timeline[i]?.context0;
+        if (ctx?.kind !== "SLEEP") continue;
+        const dt = Number(timeline[i]?.dtMinutes ?? 0) || 0;
+        if (!Number.isFinite(dt) || dt <= 0) continue;
+
+        const k = sleepStageKind(ctx.sleepStage);
+        if (k === "deep") stageMinutes.deep += dt;
+        else if (k === "rem") stageMinutes.rem += dt;
+        else if (k === "awake") stageMinutes.awake += dt;
+        else if (k === "inbed") stageMinutes.inbed += dt;
+        else stageMinutes.core += dt;
+
+        totalMin += dt;
+      }
+
+      const factor = computeSleepArchitectureFactor(stageMinutes, totalMin);
+      out.sessions.push({
+        startIdx: s.startIdx,
+        endIdx: s.endIdx,
+        durationMinutes: totalMin,
+        stageMinutes,
+        factor,
+      });
+
+      for (let i = s.startIdx; i <= s.endIdx; i++) {
+        if (timeline[i]?.context0?.kind !== "SLEEP") continue;
+        out.factorOfEpoch[i] = factor;
+      }
+    }
+
+    return out;
   }
 
   function computeIndices(epoch, context, baselines, params, q, dtMinutes, meta) {
@@ -1041,21 +1164,42 @@
     const tempAnomWeight = clamp(Number(params.tempAnomWeight ?? 0.9), 0, 3);
     const anomIndex = 1.0 * spo2PenaltyEff + 0.7 * rrPenaltyEff + tempAnomWeight * tempHarmIndex;
 
-    const stageFactor = context.kind === "SLEEP" ? sleepStageFactor(context.sleepStage) : 0;
+    const stageFactor = isSleep ? sleepStageFactor(context.sleepStage) : 0;
+    const sleepArchFactor = !isSleep ? 1 : clamp(Number(meta?.sleepArchitectureFactor ?? 1), 0.55, 1.25);
 
-    let autonomicFactor = 1;
-    if (zHrv !== null) autonomicFactor += 0.25 * clamp(zHrv, -3, 3);
-    if (hr !== null && Number.isFinite(rhr)) autonomicFactor -= 0.1 * clamp((hr - rhr) / 5, 0, 5);
-    autonomicFactor = clamp(autonomicFactor, 0.4, 1.6);
+    // HRV is a primary driver (scaled by personal baseline z-score); HR/RR are auxiliary signals.
+    const qHrv = clamp(Number(q.hrv ?? 0), 0, 1);
+    const zHrv0 = zHrv === null ? 0 : clamp(zHrv, -3, 3);
+    const hrvDelta = tanh(zHrv0 / 1.7);
+    const hrvFactorRaw = 1 + 0.38 * hrvDelta;
+    const hrvFactor = clamp(lerp(0.9, hrvFactorRaw, qHrv), 0.7, 1.35);
 
-    const anomPenalty = Math.exp(-0.12 * anomIndex);
-    let sleepRecovery = stageFactor * autonomicFactor * anomPenalty;
-    if (isSleep && tempOnsetBenefitIndex > 0) {
-      sleepRecovery *= 1 + onsetBoost * tempOnsetBenefitIndex;
+    let hrFactor = 1;
+    const qHr = clamp(Number(q.hr ?? 0), 0, 1);
+    if (hr !== null && Number.isFinite(rhr) && qHr > 0) {
+      const hrDelta = Number(rhr) - hr;
+      hrFactor = 1 + 0.05 * tanh(hrDelta / 10) * qHr;
+      hrFactor = clamp(hrFactor, 0.93, 1.07);
     }
-    const sleepQualityExp = clamp(toNumberOrNull(params.sleepRecoveryExponent) ?? 1.3, 0.5, 3);
-    sleepRecovery = clamp(sleepRecovery, 0, 2.5);
-    if (isSleep && sleepRecovery > 0) sleepRecovery = clamp(Math.pow(sleepRecovery, sleepQualityExp), 0, 2.5);
+
+    let rrFactor = 1;
+    const qRr = clamp(Number(q.rr ?? 0), 0, 1);
+    if (rr !== null && Number.isFinite(rrScale) && rrScale > 0 && qRr > 0) {
+      const rrHigh = relu((rr - Number(baselines.respRateBrpm)) / (2 * rrScale));
+      rrFactor = 1 - 0.04 * clamp(rrHigh, 0, 3) * qRr;
+      rrFactor = clamp(rrFactor, 0.88, 1);
+    }
+
+    // Reference penalties: temperature/SpO2 dominate; RR is down-weighted (auxiliary).
+    const sleepPenaltyIndex = 1.0 * spo2PenaltyEff + 0.25 * rrPenaltyEff + tempAnomWeight * tempHarmIndex;
+    const sleepAnomPenalty = Math.exp(-0.10 * sleepPenaltyIndex);
+
+    let sleepRecovery = stageFactor * sleepArchFactor * hrvFactor * hrFactor * rrFactor * sleepAnomPenalty;
+    if (isSleep && tempOnsetBenefitIndex > 0) sleepRecovery *= 1 + onsetBoost * tempOnsetBenefitIndex;
+
+    const sleepQualityExp = clamp(toNumberOrNull(params.sleepRecoveryExponent) ?? 1, 0.5, 3);
+    sleepRecovery = clamp(sleepRecovery, 0, 2.0);
+    if (isSleep && sleepRecovery > 0) sleepRecovery = clamp(Math.pow(sleepRecovery, sleepQualityExp), 0, 2.0);
 
     let restRecoveryRaw = 0;
     if (context.kind === "AWAKE_REST" || context.kind === "AWAKE" || context.kind === "POST_ACTIVITY_RECOVERY") {
@@ -1412,6 +1556,8 @@
     const behaviorBaselineCfg = readBehaviorBaselineConfig(userConfig);
     const timeline = buildContextTimeline(epochs, params, baselines);
     const { segments: contextSegments, segmentOf: segmentOfEpoch } = buildContextSegments(epochs, timeline, baselines);
+    const sleepArchitecture = buildSleepArchitectureFactorByEpoch(timeline, 90);
+    const sleepArchitectureFactorOfEpoch = sleepArchitecture.factorOfEpoch;
     const behaviorBaseline = behaviorBaselineCfg.enabled
       ? buildBehaviorBaselineFromSegments(contextSegments, timeline, behaviorBaselineCfg)
       : null;
@@ -1571,6 +1717,7 @@
       const indices = computeIndices(eEff, context0, baselines, params, q, dtMinutes, {
         sleepMinutesFromStart,
         sleepHeatStreakMinutes,
+        sleepArchitectureFactor: sleepArchitectureFactorOfEpoch[i],
       });
 
       const activeThreshold = clamp(Number(params.postActivityRecoveryMinActivityIntensity01 ?? 0.25), 0, 1);
@@ -1759,6 +1906,7 @@
           charge: step.chargeGate.weights,
           drain: step.drainGate.weights,
         },
+        sleepArchitectureFactor: sleepArchitectureFactorOfEpoch[i],
         quality: q,
         confidence: step.confidence,
         context,

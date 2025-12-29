@@ -478,11 +478,11 @@
         function stageFactor(sleepStage) {
           if (!sleepStage) return 1;
           const s = String(sleepStage).toLowerCase();
-          if (s.includes("deep")) return 1.2;
+          if (s.includes("deep")) return 1.05;
           if (s.includes("core") || s.includes("light")) return 1;
-          if (s.includes("rem")) return 0.9;
-          if (s.includes("awake")) return 0.25;
-          if (s.includes("inbed") || s.includes("in_bed")) return 0.35;
+          if (s.includes("rem")) return 0.95;
+          if (s.includes("awake")) return 0.05;
+          if (s.includes("inbed") || s.includes("in_bed")) return 0.15;
           return 1;
         }
 
@@ -556,7 +556,7 @@
           const sleepStageRaw = epoch.sleepStage ?? epoch.sleep ?? null;
           const sleepStage =
             sleepStageRaw === null || sleepStageRaw === undefined || sleepStageRaw === "" ? null : String(sleepStageRaw);
-          if (sleepStage && sleepStage !== "awake") return { kind: "SLEEP", sleepStage };
+          if (sleepStage) return { kind: "SLEEP", sleepStage };
 
           const mindful = Boolean(epoch.mindful ?? epoch.mindfulness ?? epoch.isMindful);
           if (mindful) return { kind: "MEDITATION" };
@@ -816,7 +816,7 @@
           const qLoad = clamp(Math.max(q.steps ?? 0, q.energy ?? 0, q.power ?? 0, q.hr ?? 0), 0, 1);
           const qStress = clamp(Math.max(q.hrv ?? 0, q.hr ?? 0), 0, 1);
           const qAnom = clamp(Math.max(q.spo2 ?? 0, q.rr ?? 0, q.temp ?? 0), 0, 1);
-          const qSleep = clamp(0.4 + 0.3 * (q.hrv ?? 0) + 0.2 * (q.hr ?? 0) + 0.1 * qAnom, 0, 1);
+          const qSleep = clamp(0.55 * (q.hrv ?? 0) + 0.35 * (q.hr ?? 0) + 0.1 * qAnom, 0, 1);
           const qRest = clamp(0.35 + 0.45 * (q.hr ?? 0) + 0.2 * (q.steps ?? 0), 0, 1);
           const qMind = clamp(0.35 + 0.4 * (q.hr ?? 0) + 0.25 * (q.hrv ?? 0), 0, 1);
 
@@ -829,8 +829,9 @@
           const mindRecovery = Number(rec.mind ?? 0);
           const extraCharge = Math.max(0, Number(rec.calmRecoveryChargePerHour ?? 0));
 
+          const sleepDurationWeight = clamp(toNumberOrNull(params.sleepChargeDurationWeight) ?? 1, 0, 1.5);
           const rawChargePerHour =
-            chargeGate.weights.sleep * Number(params.baseSleepChargePerHour ?? 9) * sleepRecovery +
+            sleepDurationWeight * chargeGate.weights.sleep * Number(params.baseSleepChargePerHour ?? 9) * sleepRecovery +
             chargeGate.weights.rest * Number(params.baseRestChargePerHour ?? 2) * restRecovery +
             chargeGate.weights.mind * Number(params.baseMindChargePerHour ?? 4) * mindRecovery;
 
@@ -855,15 +856,45 @@
 
           const hr = toNumberOrNull(row.input?.hr);
           const hrv = toNumberOrNull(row.input?.hrv);
-          const zHrv = hrv === null ? null : normalizeZ(hrv, Number(baselines.hrvSdnnMs), Number(baselines.hrvScaleMs));
-          let autonomicFactor = 1;
-          if (zHrv !== null) autonomicFactor += 0.15 * clamp(zHrv, -3, 3);
-          if (hr !== null && Number.isFinite(Number(baselines.rhrBpm))) autonomicFactor -= 0.1 * clamp((hr - Number(baselines.rhrBpm)) / 5, 0, 5);
-          autonomicFactor = clamp(autonomicFactor, 0.4, 1.6);
+          const spo2 = toNumberOrNull(row.input?.spo2);
+          const rr = toNumberOrNull(row.input?.rr);
 
-          const anomIndex = toNumberOrNull(dr.anomIndex) ?? 0;
-          const anomPenalty = Math.exp(-0.12 * anomIndex);
+          const zHrv = hrv === null ? null : normalizeZ(hrv, Number(baselines.hrvSdnnMs), Number(baselines.hrvScaleMs));
+          const zHrv0 = zHrv === null ? 0 : clamp(zHrv, -3, 3);
+
+          const qHrv = clamp(Number(q.hrv ?? 0), 0, 1);
+          const hrvDelta = Math.tanh(zHrv0 / 1.7);
+          const hrvFactorRaw = 1 + 0.38 * hrvDelta;
+          const hrvFactor = clamp(0.9 + (hrvFactorRaw - 0.9) * qHrv, 0.7, 1.35);
+
+          let hrFactor = 1;
+          const qHr = clamp(Number(q.hr ?? 0), 0, 1);
+          if (hr !== null && Number.isFinite(Number(baselines.rhrBpm)) && qHr > 0) {
+            const hrDelta = Number(baselines.rhrBpm) - hr;
+            hrFactor = 1 + 0.05 * Math.tanh(hrDelta / 10) * qHr;
+            hrFactor = clamp(hrFactor, 0.93, 1.07);
+          }
+
+          let rrFactor = 1;
+          const qRr = clamp(Number(q.rr ?? 0), 0, 1);
+          const rrScale = Number(baselines.respRateScaleBrpm);
+          if (rr !== null && Number.isFinite(rrScale) && rrScale > 0 && qRr > 0) {
+            const rrHigh = Math.max(0, (rr - Number(baselines.respRateBrpm)) / (2 * rrScale));
+            rrFactor = 1 - 0.04 * clamp(rrHigh, 0, 3) * qRr;
+            rrFactor = clamp(rrFactor, 0.88, 1);
+          }
+
+          const tempAnomWeight = clamp(Number(params.tempAnomWeight ?? 0.9), 0, 3);
+          const spo2Penalty = spo2 === null ? 0 : Math.max(0, (Number(baselines.spo2Pct) - spo2) / 2);
+          const rrPenalty = rr === null ? 0 : Math.max(0, (rr - Number(baselines.respRateBrpm)) / 2);
+          const spo2PenaltyEff = spo2Penalty * clamp(Number(q.spo2 ?? 0), 0, 1);
+          const rrPenaltyEff = rrPenalty * clamp(Number(q.rr ?? 0), 0, 1);
+          const tempHarmIndex = Math.max(0, Number(row.temperature?.harmIndex ?? 0) || 0);
+          const sleepPenaltyIndex = 1.0 * spo2PenaltyEff + 0.25 * rrPenaltyEff + tempAnomWeight * tempHarmIndex;
+          const sleepAnomPenalty = Math.exp(-0.10 * sleepPenaltyIndex);
+
           const stFactor = kind === "SLEEP" ? stageFactor(ctx.sleepStage) : 0;
+          const sleepArchFactor = kind === "SLEEP" ? clamp(Number(row.sleepArchitectureFactor ?? 1), 0.55, 1.25) : 1;
           const onsetBoost = clamp(Number(params.tempOnsetBenefitMaxBoost ?? 0.12), 0, 0.5);
           const onsetIdx = clamp(Number(row.temperature?.onsetBenefitIndex ?? 0), 0, 1);
           const onsetMult = kind === "SLEEP" && onsetIdx > 0 ? 1 + onsetBoost * onsetIdx : 1;
@@ -885,7 +916,18 @@
             deltaCore,
             maxDelta,
             q: { qLoad, qStress, qAnom, qSleep, qRest, qMind },
-            sleepExplainer: { stFactor, zHrv, autonomicFactor, anomIndex, anomPenalty, onsetIdx, onsetMult },
+            sleepExplainer: {
+              stFactor,
+              sleepArchFactor,
+              zHrv,
+              hrvFactor,
+              hrFactor,
+              rrFactor,
+              sleepPenaltyIndex,
+              sleepAnomPenalty,
+              onsetIdx,
+              onsetMult,
+            },
           };
         }
 
@@ -1143,7 +1185,7 @@
 
           const sleep = derived.sleepExplainer;
           const isSleep = kind === "SLEEP";
-          const anomPenalty = clamp(sleep.anomPenalty, 0, 1);
+          const sleepAnomPenalty = clamp(sleep.sleepAnomPenalty, 0, 1);
 
           const rec = row.chargeComponents || {};
           const cal = row.calmRecovery || {};
@@ -1173,9 +1215,16 @@
             { k: "Δ core", v: fmt(derived.deltaCore, 2), className: derived.deltaCore >= 0 ? "ok" : "bad" },
             { k: "sleepRecovery", v: fmt(rec.sleep, 3) + (isSleep ? "" : " (not SLEEP)") },
             { k: "stageFactor", v: isSleep ? fmt(sleep.stFactor, 2) : "—" },
+            { k: "archFactor", v: isSleep ? fmt(sleep.sleepArchFactor, 3) : "—" },
             { k: "zHRV", v: sleep.zHrv === null ? "null" : fmt(sleep.zHrv, 2) },
-            { k: "autonomic", v: fmt(sleep.autonomicFactor, 2) },
-            { k: "anomPenalty", v: fmt(anomPenalty, 3) + ` (anomIndex=${fmt(sleep.anomIndex, 2)})`, className: anomPenalty >= 0.85 ? "ok" : anomPenalty >= 0.65 ? "warn" : "bad" },
+            { k: "hrvFactor", v: isSleep ? fmt(sleep.hrvFactor, 3) : "—" },
+            { k: "hrFactor", v: isSleep ? fmt(sleep.hrFactor, 3) : "—" },
+            { k: "rrFactor", v: isSleep ? fmt(sleep.rrFactor, 3) : "—" },
+            {
+              k: "sleepAnomPenalty",
+              v: fmt(sleepAnomPenalty, 3) + ` (idx=${fmt(sleep.sleepPenaltyIndex, 2)})`,
+              className: sleepAnomPenalty >= 0.85 ? "ok" : sleepAnomPenalty >= 0.65 ? "warn" : "bad",
+            },
             { k: "tempOnset", v: `${fmt(sleep.onsetIdx, 2)} → ×${fmt(sleep.onsetMult, 3)}` },
             { k: "calmRec", v: `index=${fmt(cal.index ?? 0, 3)} extra/h=${fmt(rec.calmRecoveryChargePerHour ?? 0, 2)} stress×${fmt(cal.stressSuppressionFactor ?? 1, 3)}` },
           ]);
