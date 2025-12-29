@@ -1043,6 +1043,8 @@
           return r.confidence;
         case "hr":
           return r.input?.hr ?? null;
+        case "hrv":
+          return r.input?.hrv ?? null;
         case "steps": {
           const dtMin = Number(r.dtMinutes ?? 0) || 0;
           return dtMin > 0 ? Number(r.input?.steps ?? 0) / dtMin : null;
@@ -1143,6 +1145,8 @@
           ? "Confidence"
           : bottomMetric === "hr"
             ? "Heart rate (bpm)"
+            : bottomMetric === "hrv"
+              ? "HRV (ms)"
             : bottomMetric === "steps"
               ? "Steps/min"
               : bottomMetric === "power"
